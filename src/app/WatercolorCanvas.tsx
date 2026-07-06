@@ -249,6 +249,15 @@ export function WatercolorCanvas({ apiRef }: WatercolorCanvasProps): React.JSX.E
   );
 }
 
+// The simulation keeps five RGBA16F state textures (~40 bytes/backing pixel), so
+// backing memory grows with devicePixelRatio². High-DPR phones (dpr 3) at the
+// default canvas would try to allocate multiple gigabytes on load and crash the
+// tab. Supersampling past 2x device pixels is visually indistinguishable once
+// composited down, so cap the DPR factor here. This does not touch the user's
+// Resolution scale (canvas.renderScale), which is still applied in full.
+const MAX_DEVICE_PIXEL_RATIO = 2;
+
 function getDevicePixelRatio(): number {
-  return typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
+  const raw = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
+  return Math.min(raw, MAX_DEVICE_PIXEL_RATIO);
 }
