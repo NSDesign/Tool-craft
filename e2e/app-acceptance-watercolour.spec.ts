@@ -64,6 +64,25 @@ test.beforeEach(async ({ page }, testInfo) => {
   // steps in this sandbox much slower than on a GPU-accelerated browser; give each real interaction
   // test enough headroom instead of racing the default 30s timeout.
   testInfo.setTimeout(180_000);
+  // Acceptance verifies product behaviour, not workload (declared workload/stress fixtures live in
+  // the performance suite), so start from a small persisted canvas: the multi-pass simulation then
+  // runs fast enough under software GL for strokes and pixel snapshots to complete reliably.
+  await page.addInitScript(() => {
+    // Only seed a missing state so in-test reloads keep the runtime's own
+    // persisted values (the persistence acceptance test depends on that).
+    if (!window.localStorage.getItem("toolcraft:watercolour-painter:state:v1")) {
+      window.localStorage.setItem(
+        "toolcraft:watercolour-painter:state:v1",
+        JSON.stringify({
+          version: 1,
+          state: {
+            canvas: { size: { height: 270, unit: "px", width: 480 } },
+            values: { "canvas.renderScale": 1 },
+          },
+        }),
+      );
+    }
+  });
   await page.goto("/", { waitUntil: "networkidle" });
   await expect(page.locator(watercolorCanvasSelector)).toBeVisible();
 });
@@ -76,6 +95,18 @@ test("acceptance: pigment swatch selection changes the active pigment and next s
     async () => {
       await page.getByRole("radio", { name: "Orange" }).click();
       await paintStroke(page);
+    },
+    { timeoutMs: 60_000 },
+  );
+
+  // The clear Water swatch is a wet brush: stroking over the paint deposits no
+  // new colour but re-wets it, visibly softening/bleeding the stroke.
+  await expectToolcraftProductObservableToChange(
+    page,
+    async () => {
+      await page.getByRole("radio", { name: "Water" }).click();
+      await paintStroke(page);
+      await page.waitForTimeout(1500);
     },
     { timeoutMs: 60_000 },
   );
@@ -140,33 +171,41 @@ test("acceptance: brush size drag changes deposited stroke width", async ({ page
   );
 });
 
-test("acceptance: refresh restores brush water charge after a stroke depletes it", async ({
+test("acceptance: paper texture preset updates the roughness and relief sliders", async ({
   page,
 }) => {
-  const canvas = page.locator(watercolorCanvasSelector);
-  const box = await canvas.boundingBox();
-  if (!box) {
-    throw new Error("Watercolour canvas not found.");
-  }
+  // The preset action one-shot-writes the two visible sliders and visibly
+  // changes the blank paper texture rendered on the canvas.
+  await expectToolcraftProductObservableToChange(
+    page,
+    async () => {
+      await page.getByRole("button", { name: "Rough", exact: true }).click();
+    },
+    { timeoutMs: 60_000 },
+  );
 
-  // A long stroke depletes brush charge; then Refresh should restore it before the next stroke.
-  await page.mouse.move(box.x + box.width * 0.1, box.y + box.height * 0.2);
-  await page.mouse.down();
-  for (let step = 0; step < 6; step += 1) {
-    await page.mouse.move(
-      box.x + box.width * (0.1 + step * 0.15),
-      box.y + box.height * (0.2 + step * 0.1),
-      { steps: 4 },
-    );
-  }
-  await page.mouse.up();
+  // The slider's current value is rendered as the text of its editable value
+  // button (the slider group itself carries no aria-valuenow).
+  const roughnessValue = page.getByRole("button", { name: "Edit Roughness value" });
+  await expect(roughnessValue).toContainText("86");
 
-  await page.getByRole("button", { name: "Refresh" }).click();
+  await page.getByRole("button", { name: "Hot press", exact: true }).click();
+  await expect(roughnessValue).toContainText("14");
 
+  const reliefValue = page.getByRole("button", { name: "Edit Relief height value" });
+  await expect(reliefValue).toContainText("18");
+});
+
+test("acceptance: tilt makes wet paint run down the page", async ({ page }) => {
+  await dragToolcraftSliderByLabel(page, "Tilt", 0.95);
+
+  // A very wet stroke near the top of the tilted paper visibly deposits and
+  // then sags downward as the surface flow runs with gravity.
   await expectToolcraftProductObservableToChange(
     page,
     async () => {
       await paintStroke(page);
+      await page.waitForTimeout(2000);
     },
     { timeoutMs: 60_000 },
   );

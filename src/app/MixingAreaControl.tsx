@@ -3,7 +3,7 @@
 import * as React from "react";
 import type { ToolcraftCustomControlRenderer } from "@/toolcraft/runtime/react";
 
-import { defaultPigmentHex } from "./pigments";
+import { defaultPigmentHex, isWaterPigment } from "./pigments";
 
 export type MixingAreaValue = {
   pixels: string | null;
@@ -109,6 +109,20 @@ export const MixingAreaControl: ToolcraftCustomControlRenderer = ({
     const context = getContext();
 
     if (!context) {
+      return;
+    }
+
+    if (isWaterPigment(currentPigmentHex)) {
+      // A water dab thins the mixed paint back toward the clean palette base
+      // instead of depositing a colour.
+      const gradient = context.createRadialGradient(x, y, 0, x, y, MIXING_AREA_DAB_RADIUS);
+      gradient.addColorStop(0, `${PALETTE_BASE_COLOR}55`);
+      gradient.addColorStop(1, `${PALETTE_BASE_COLOR}00`);
+      context.globalCompositeOperation = "source-over";
+      context.fillStyle = gradient;
+      context.beginPath();
+      context.arc(x, y, MIXING_AREA_DAB_RADIUS, 0, Math.PI * 2);
+      context.fill();
       return;
     }
 

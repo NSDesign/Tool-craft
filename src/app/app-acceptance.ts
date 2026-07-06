@@ -368,7 +368,7 @@ export const starterControlSectionInventory: readonly ToolcraftControlSectionInv
   {
     entity: "pigment",
     groupingReason:
-      "The fixed 8-swatch pigment picker is the whole product entity for this section: it owns the single shared active-pigment reference the brush deposits and the mixing palette samples.",
+      "The fixed swatch picker (eight pigments plus the clear Water wet-brush) is the whole product entity for this section: it owns the single shared active-pigment reference the brush deposits and the mixing palette samples, and picking any swatch re-dips the brush to a full charge.",
     targets: ["paint.currentPigmentColor"],
     title: "Pigments",
     workflowStage: "preset-select",
@@ -381,14 +381,6 @@ export const starterControlSectionInventory: readonly ToolcraftControlSectionInv
     title: "Brush",
   },
   {
-    entity: "brush water",
-    groupingReason:
-      "Refresh is the single command for the brush's water/pigment charge, a distinct depleting resource from the static brush shape settings.",
-    targets: ["brush.waterCharge"],
-    title: "Water",
-    workflowStage: "action",
-  },
-  {
     entity: "mixing palette",
     groupingReason:
       "The interactive mixing palette canvas and its Reset action both operate on the same mixing-palette runtime state and belong together as one workflow stage.",
@@ -399,11 +391,12 @@ export const starterControlSectionInventory: readonly ToolcraftControlSectionInv
   {
     entity: "paper",
     groupingReason:
-      "Drying speed, relief height, and roughness are the paper's own procedural texture parameters, and Clear wipes the same paint layer painted onto that paper, so all four stay in one Paper section.",
+      "Drying speed, relief height, roughness, and the Hot press/Cold press/Rough texture presets are the paper's own texture parameters (presets one-shot-write the two sliders), and Clear wipes the same paint layer painted onto that paper, so they all stay in one Paper section.",
     targets: [
       "paper.dryingSpeed",
       "paper.reliefHeight",
       "paper.roughness",
+      "paper.texturePreset",
       "canvas.paintLayer",
     ],
     title: "Paper",
@@ -411,11 +404,12 @@ export const starterControlSectionInventory: readonly ToolcraftControlSectionInv
   {
     entity: "watercolour dynamics",
     groupingReason:
-      "Edge darkening, granulation, pigment opacity, and wetness spread are the four simulation parameters that drive the shared diffusion/evaporation/granulation/edge-darkening pass; grouping them lets a painter tune the wet-media behaviour as one workflow stage.",
+      "Edge darkening, granulation, pigment opacity, wetness spread, and easel tilt are the simulation parameters that drive the shared force-field/diffusion/absorption/evaporation passes; grouping them lets a painter tune the wet-media behaviour as one workflow stage.",
     targets: [
       "dynamics.edgeDarkening",
       "dynamics.granulation",
       "dynamics.pigmentOpacity",
+      "dynamics.tilt",
       "dynamics.wetnessSpread",
     ],
     title: "Watercolour Dynamics",
@@ -463,20 +457,21 @@ export const appAcceptance: readonly ToolcraftComponentAcceptance[] = [
       checkedBuiltIns: ["palette", "color", "segmented", "actions", "collectionActions"],
       closestBuiltIn: "palette",
       productObservable:
-        "Clicking a swatch writes {hex, pickedAt} to the shared paint.currentPigmentColor target, refills brush water charge, and changes the pigment color deposited by the next stroke on the watercolour canvas.",
+        "Clicking a swatch writes {hex, pickedAt} to the shared paint.currentPigmentColor target, re-dips the brush to a full water/pigment charge, and changes what the next stroke deposits: a pigment swatch deposits that colour, while the clear Water swatch deposits water only, diluting wet paint and re-dissolving dried paint on the canvas.",
       whyInsufficient:
-        "Palette exposes a family/shade grid, not eight fixed named pigment identities, and cannot write a compound {hex, pickedAt} value that also drives a brush-recharge side effect. Color opens a color-wheel editor instead of a fixed named-swatch picker. Segmented caps at 4 options and 24 total label characters, far short of 8 named pigments. No built-in control renders fixed named swatches while writing a compound value with a pick timestamp.",
+        "Palette exposes a family/shade grid, not eight fixed named pigment identities plus a clear-water wet-brush mode, and cannot write a compound {hex, pickedAt} value that also drives a brush-recharge side effect. Color opens a color-wheel editor instead of a fixed named-swatch picker and has no concept of a non-colour water swatch. Segmented caps at 4 options and 24 total label characters, far short of 9 swatches. No built-in control renders fixed named swatches while writing a compound value with a pick timestamp.",
     },
     componentType: "paintSwatches",
     customControlCoverage: "all-custom-control-behavior",
     evidence: "rendered-pixels",
     expectedObservable:
-      "Clicking a pigment swatch (for example Orange) and then dragging a stroke deposits that pigment's color on the watercolour canvas instead of the previously selected pigment, and the brush water charge is restored to full.",
+      "Clicking a pigment swatch (for example Orange) and then dragging a stroke deposits that pigment's colour instead of the previously selected pigment, with the brush re-dipped to full charge; clicking the Water swatch and stroking over dried paint deposits no colour but visibly re-wets it, making the dried stroke bleed and soften.",
     fixture: "Fresh watercolour canvas with the default Red pigment selected.",
     id: "paint.currentPigmentColor",
     kind: "control",
     target: "paint.currentPigmentColor",
-    userAction: "Click the Orange pigment swatch, then drag a stroke across the canvas.",
+    userAction:
+      "Click the Orange pigment swatch and drag a stroke, then click the Water swatch and drag across a dried stroke.",
   },
   {
     automated: true,
@@ -527,18 +522,23 @@ export const appAcceptance: readonly ToolcraftComponentAcceptance[] = [
   },
   {
     automated: true,
-    automatedTestName: "acceptance: refresh restores brush water charge after a stroke depletes it",
+    automatedTestName: "acceptance: paper texture preset updates the roughness and relief sliders",
     browser: true,
-    browserTestName: "acceptance: refresh restores brush water charge after a stroke depletes it",
+    browserTestName: "acceptance: paper texture preset updates the roughness and relief sliders",
+    actionCoverage: [
+      "paper-preset-hot-press",
+      "paper-preset-cold-press",
+      "paper-preset-rough",
+    ],
     componentType: "actions",
     evidence: "command-side-effect",
     expectedObservable:
-      "After a long stroke depletes brush water charge (later parts of the stroke deposit lighter, drier pigment), clicking Refresh restores full charge so the next stroke deposits at full strength again.",
-    fixture: "A long dragged stroke that visibly depletes brush charge before Refresh is clicked.",
-    id: "brush.waterCharge",
+      "Clicking Hot press, Cold press, or Rough writes the matching values into the visible Roughness and Relief height sliders and visibly changes the blank paper's texture (Hot press smooth, Rough heavily grained).",
+    fixture: "Fresh watercolour canvas at the default Cold-press-like slider values.",
+    id: "paper.texturePreset",
     kind: "control",
-    target: "brush.waterCharge",
-    userAction: "Drag a long stroke to deplete charge, click Refresh, then draw a fresh stroke.",
+    target: "paper.texturePreset",
+    userAction: "Click the Rough preset, then the Hot press preset, reading the sliders after each.",
   },
   {
     automated: true,
@@ -684,6 +684,21 @@ export const appAcceptance: readonly ToolcraftComponentAcceptance[] = [
     kind: "control",
     target: "dynamics.pigmentOpacity",
     userAction: "Set Pigment opacity to maximum, paint a stroke, then set it to minimum and paint another stroke.",
+  },
+  {
+    automated: true,
+    automatedTestName: "acceptance: tilt makes wet paint run down the page",
+    browser: true,
+    browserTestName: "acceptance: tilt makes wet paint run down the page",
+    componentType: "slider",
+    evidence: "rendered-pixels",
+    expectedObservable:
+      "With Tilt at its maximum, a wet stroke visibly sags and runs downward on the canvas over the following seconds; at the default 0 (flat) the same stroke stays in place with no directional flow.",
+    fixture: "Fresh watercolour canvas with a very wet stroke painted near the top.",
+    id: "dynamics.tilt",
+    kind: "control",
+    target: "dynamics.tilt",
+    userAction: "Drag Tilt to its maximum, paint a wet stroke near the top, and watch it run downward.",
   },
   {
     automated: true,

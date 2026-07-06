@@ -58,11 +58,18 @@ describe("watercolour app acceptance scenarios are well-formed", () => {
     expect(getSchemaControlByTarget("brush.size")?.type).toBe("slider");
   });
 
-  test("acceptance: refresh restores brush water charge after a stroke depletes it", () => {
-    const entry = getAcceptance("brush.waterCharge");
-    expect(entry.target).toBe("brush.waterCharge");
+  test("acceptance: paper texture preset updates the roughness and relief sliders", () => {
+    const entry = getAcceptance("paper.texturePreset");
+    expect(entry.target).toBe("paper.texturePreset");
     expect(entry.componentType).toBe("actions");
-    expect(getSchemaControlByTarget("brush.waterCharge")?.type).toBe("actions");
+    expect(getSchemaControlByTarget("paper.texturePreset")?.type).toBe("actions");
+  });
+
+  test("acceptance: tilt makes wet paint run down the page", () => {
+    const entry = getAcceptance("dynamics.tilt");
+    expect(entry.target).toBe("dynamics.tilt");
+    expect(entry.componentType).toBe("slider");
+    expect(getSchemaControlByTarget("dynamics.tilt")?.type).toBe("slider");
   });
 
   test("acceptance: mixing palette drag deposits pigment and sample click updates the active pigment", () => {

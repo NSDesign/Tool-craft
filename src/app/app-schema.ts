@@ -1,6 +1,6 @@
 import { defineToolcraft } from "@/toolcraft/runtime";
 
-import { defaultPigmentHex, pigments } from "./pigments";
+import { defaultPigmentHex, pigments, waterPigmentValue } from "./pigments";
 
 export const appSchema = defineToolcraft({
   canvas: {
@@ -22,11 +22,16 @@ export const appSchema = defineToolcraft({
           controls: {
             pigment: {
               defaultValue: defaultPigmentHex,
+              description:
+                "Eight pigments plus a clear Water swatch: painting with Water wets the paper, dilutes wet paint, and re-dissolves dried paint instead of adding colour. Picking any swatch re-dips the brush to a full charge.",
               label: "Pigment",
-              options: pigments.map((pigment) => ({
-                label: pigment.name,
-                value: pigment.hex,
-              })),
+              options: [
+                ...pigments.map((pigment) => ({
+                  label: pigment.name,
+                  value: pigment.hex,
+                })),
+                { label: "Water", value: waterPigmentValue },
+              ],
               orderRole: "color",
               performanceReason:
                 "Selecting a swatch only updates the active pigment reference used by the next stroke; it does not change simulation resolution or pass count.",
@@ -85,23 +90,6 @@ export const appSchema = defineToolcraft({
             },
           },
           title: "Brush",
-        },
-        {
-          controls: {
-            refresh: {
-              actions: [
-                { icon: "rotate-ccw", label: "Refresh", value: "water-refresh" },
-              ],
-              label: "Brush water",
-              orderRole: "action",
-              performanceReason:
-                "Refreshing brush water is a one-shot charge reset with no simulation-resolution impact.",
-              performanceRole: "responsiveness",
-              target: "brush.waterCharge",
-              type: "actions",
-            },
-          },
-          title: "Water",
         },
         {
           controls: {
@@ -172,6 +160,22 @@ export const appSchema = defineToolcraft({
               type: "slider",
               unit: "%",
             },
+            preset: {
+              actions: [
+                { label: "Hot press", value: "paper-preset-hot-press" },
+                { label: "Cold press", value: "paper-preset-cold-press" },
+                { label: "Rough", value: "paper-preset-rough" },
+              ],
+              description:
+                "Classic watercolour paper presets: Hot press is smooth, Cold press is medium-textured, Rough is heavily textured. Presets set the Roughness and Relief height sliders.",
+              label: "Texture preset",
+              orderRole: "action",
+              performanceReason:
+                "A preset is a one-shot write to the existing Roughness/Relief height slider values; the heightmap regenerates once, exactly as a manual slider change does.",
+              performanceRole: "responsiveness",
+              target: "paper.texturePreset",
+              type: "actions",
+            },
             clear: {
               actions: [{ icon: "eraser", label: "Clear", value: "canvas-clear-painting" }],
               label: "Painting",
@@ -228,6 +232,22 @@ export const appSchema = defineToolcraft({
               performanceRole: "responsiveness",
               step: 1,
               target: "dynamics.pigmentOpacity",
+              type: "slider",
+              unit: "%",
+            },
+            tilt: {
+              defaultValue: 0,
+              description:
+                "Easel tilt: 0 lays the paper flat with no directional flow; higher values tilt it upright so wet paint runs down the page and can drip.",
+              label: "Tilt",
+              max: 100,
+              min: 0,
+              orderRole: "strength",
+              performanceReason:
+                "Tilt scales the gravity term inside the existing force-field pass; it does not add render passes or change texture resolution.",
+              performanceRole: "responsiveness",
+              step: 1,
+              target: "dynamics.tilt",
               type: "slider",
               unit: "%",
             },

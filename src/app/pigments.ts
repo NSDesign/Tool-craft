@@ -27,7 +27,21 @@ export const pigments: readonly Pigment[] = [
 
 export const defaultPigmentHex: string = pigments[0].hex;
 
+/**
+ * Sentinel swatch value for the clear-water "wet brush": painting with it deposits
+ * surface water only (diluting and re-wetting paint) instead of pigment.
+ */
+export const waterPigmentValue = "water";
+
+export function isWaterPigment(value: string): boolean {
+  return value.toLowerCase() === waterPigmentValue;
+}
+
 export function hexToRgb01(hex: string): [number, number, number] {
+  if (isWaterPigment(hex)) {
+    return [1, 1, 1];
+  }
+
   const normalized = hex.replace("#", "");
   const r = Number.parseInt(normalized.slice(0, 2), 16) / 255;
   const g = Number.parseInt(normalized.slice(2, 4), 16) / 255;

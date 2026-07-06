@@ -1,5 +1,12 @@
 import { expect, test } from "@playwright/test";
 
+test.beforeEach(({}, testInfo) => {
+  // First-load under this sandbox's software GL rendering combines Vite's cold
+  // module transform with slow initial WebGL frames; the default 30s timeout is
+  // borderline when other spec files run concurrently.
+  testInfo.setTimeout(90_000);
+});
+
 test("browser: watercolour app renders the product controls shell", async ({ page }) => {
   await page.goto("/");
 
@@ -8,7 +15,7 @@ test("browser: watercolour app renders the product controls shell", async ({ pag
   await expect(page.locator('[data-toolcraft-watercolor-canvas="true"]')).toBeVisible();
 
   await expect(page.getByRole("radio", { name: "Red" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Refresh" })).toBeVisible();
+  await expect(page.getByRole("radio", { name: "Water" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Clear" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Export PNG" })).toBeVisible();
 

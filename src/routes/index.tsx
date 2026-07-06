@@ -40,8 +40,27 @@ export function AppHome(): React.JSX.Element {
             return;
           }
 
-          case "water-refresh": {
-            canvasApiRef.current?.refreshWater();
+          case "paper-preset-hot-press":
+          case "paper-preset-cold-press":
+          case "paper-preset-rough": {
+            // Classic paper textures expressed through the two existing sliders,
+            // so presets stay a one-shot write with a single source of truth.
+            const presets: Record<string, { reliefHeight: number; roughness: number }> = {
+              "paper-preset-cold-press": { reliefHeight: 50, roughness: 50 },
+              "paper-preset-hot-press": { reliefHeight: 18, roughness: 14 },
+              "paper-preset-rough": { reliefHeight: 82, roughness: 86 },
+            };
+            const preset = presets[action.value];
+            dispatch({
+              target: "paper.roughness",
+              type: "controls.setValue",
+              value: preset.roughness,
+            });
+            dispatch({
+              target: "paper.reliefHeight",
+              type: "controls.setValue",
+              value: preset.reliefHeight,
+            });
             return;
           }
 

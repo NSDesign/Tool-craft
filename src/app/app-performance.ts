@@ -96,7 +96,7 @@ export const appPerformance: ToolcraftPerformanceConfig = defineToolcraftPerform
     interactionInvalidation: [
       {
         interaction: "control-drag",
-        invalidates: ["simulation-step", "preview-composite"],
+        invalidates: ["force-field", "simulation-step", "preview-composite"],
         mustNotInvalidate: ["export-pixel-readback", "export-encode"],
         targets: [
           "canvas.renderScale",
@@ -108,11 +108,12 @@ export const appPerformance: ToolcraftPerformanceConfig = defineToolcraftPerform
           "dynamics.granulation",
           "dynamics.edgeDarkening",
           "dynamics.pigmentOpacity",
+          "dynamics.tilt",
         ],
       },
       {
         interaction: "control-change",
-        invalidates: ["simulation-step", "preview-composite"],
+        invalidates: ["force-field", "simulation-step", "preview-composite"],
         mustNotInvalidate: ["export-pixel-readback", "export-encode"],
         targets: [
           "canvas.size.width",
@@ -120,9 +121,9 @@ export const appPerformance: ToolcraftPerformanceConfig = defineToolcraftPerform
           "brush.type",
           "brush.hairType",
           "paint.currentPigmentColor",
-          "brush.waterCharge",
           "paint.mixingArea",
           "paint.mixingArea.reset",
+          "paper.texturePreset",
           "canvas.paintLayer",
           "export.image.resolution",
           "export.image.format",
@@ -132,12 +133,13 @@ export const appPerformance: ToolcraftPerformanceConfig = defineToolcraftPerform
       },
       {
         interaction: "animation-frame",
-        invalidates: ["simulation-step", "preview-composite"],
+        invalidates: ["force-field", "simulation-step", "preview-composite"],
         targets: [
           "paper.dryingSpeed",
           "dynamics.wetnessSpread",
           "dynamics.granulation",
           "dynamics.edgeDarkening",
+          "dynamics.tilt",
         ],
       },
       {
@@ -171,9 +173,20 @@ export const appPerformance: ToolcraftPerformanceConfig = defineToolcraftPerform
     passes: [
       {
         cacheKey: ["canvas.size.width", "canvas.size.height", "canvas.renderScale"],
+        id: "force-field",
+        inputs: ["previous-simulation-state", "dynamics-uniforms"],
+        invalidatedBy: ["control-drag", "control-change", "animation-frame"],
+        kind: "composite",
+        output: "intermediate",
+        quality: "full",
+        runsOn: "gpu",
+      },
+      {
+        cacheKey: ["canvas.size.width", "canvas.size.height", "canvas.renderScale"],
         id: "simulation-step",
         inputs: [
           "previous-simulation-state",
+          "force-field",
           "brush-uniforms",
           "dynamics-uniforms",
           "paper-uniforms",
@@ -399,6 +412,14 @@ export const appPerformance: ToolcraftPerformanceConfig = defineToolcraftPerform
       id: "pigment-opacity-control-drag",
       target: "dynamics.pigmentOpacity",
     }),
+    controlDragScenario({
+      automatedTestName: "perf: tilt-control-drag scenario is well-formed",
+      browserTestName: "browser perf: tilt drag stays responsive",
+      controlLabel: "Tilt",
+      fixtureNote: "Tilt slider dragged from flat (0) to fully upright (100).",
+      id: "tilt-control-drag",
+      target: "dynamics.tilt",
+    }),
     controlChangeScenario({
       automatedTestName: "perf: pigment-swatch-control-change scenario is well-formed",
       browserTestName: "browser perf: pigment swatch selection stays responsive",
@@ -427,13 +448,13 @@ export const appPerformance: ToolcraftPerformanceConfig = defineToolcraftPerform
       target: "brush.hairType",
     }),
     controlChangeScenario({
-      automatedTestName: "perf: brush-water-refresh-control-change scenario is well-formed",
-      browserTestName: "browser perf: refresh water action stays responsive",
+      automatedTestName: "perf: paper-preset-control-change scenario is well-formed",
+      browserTestName: "browser perf: paper texture preset stays responsive",
       expectedObservable:
-        "Clicking Refresh restores brush water charge to full without blocking the UI thread.",
-      fixtureNote: "Click the Water section Refresh action.",
-      id: "brush-water-refresh-control-change",
-      target: "brush.waterCharge",
+        "Clicking a paper texture preset updates the Roughness/Relief height sliders and regenerates the paper heightmap once without blocking the UI thread.",
+      fixtureNote: "Click the Paper section Rough preset action.",
+      id: "paper-preset-control-change",
+      target: "paper.texturePreset",
     }),
     controlChangeScenario({
       automatedTestName: "perf: mixing-area-control-change scenario is well-formed",

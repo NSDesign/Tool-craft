@@ -298,16 +298,24 @@ test("browser perf: hair type selection stays responsive", async ({ page }) => {
   expectToolcraftScenarioPerformanceBudget(result, appPerformance, "hair-type-control-change");
 });
 
-test("browser perf: refresh water action stays responsive", async ({ page }) => {
-  await paintStroke(page);
-
+test("browser perf: tilt drag stays responsive", async ({ page }) => {
   const result = await measureToolcraftInteraction(page, async () => {
-    await page.getByRole("button", { name: "Refresh" }).click();
+    await dragToolcraftSliderByLabel(page, "Tilt", 0.9);
+    await paintStroke(page);
   });
 
-  await expect(page.getByRole("button", { name: "Refresh" })).toBeVisible();
   await expect(page.locator('[data-toolcraft-watercolor-canvas="true"]')).toBeVisible();
-  expectToolcraftScenarioPerformanceBudget(result, appPerformance, "brush-water-refresh-control-change");
+  expectToolcraftScenarioPerformanceBudget(result, appPerformance, "tilt-control-drag");
+});
+
+test("browser perf: paper texture preset stays responsive", async ({ page }) => {
+  const result = await measureToolcraftInteraction(page, async () => {
+    await page.getByRole("button", { name: "Rough", exact: true }).click();
+  });
+
+  await expect(page.getByRole("button", { name: "Hot press", exact: true })).toBeVisible();
+  await expect(page.locator('[data-toolcraft-watercolor-canvas="true"]')).toBeVisible();
+  expectToolcraftScenarioPerformanceBudget(result, appPerformance, "paper-preset-control-change");
 });
 
 test("browser perf: mixing palette interactions stay responsive", async ({ page }) => {

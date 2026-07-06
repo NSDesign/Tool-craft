@@ -83,7 +83,6 @@ describe("appSchema", () => {
     expect(productSectionTitles).toEqual([
       "Pigments",
       "Brush",
-      "Water",
       "Mixing",
       "Paper",
       "Watercolour Dynamics",

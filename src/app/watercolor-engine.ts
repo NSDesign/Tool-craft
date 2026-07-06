@@ -1,4 +1,4 @@
-import { hexToRgb01, isWhitePigment } from "./pigments";
+import { hexToRgb01, isWaterPigment, isWhitePigment } from "./pigments";
 
 export type BrushShape = "round" | "filbert" | "square";
 export type HairType = "sable" | "hog";
@@ -16,8 +16,26 @@ export type WatercolorParams = {
   pigmentOpacity: number;
   reliefHeight: number;
   roughness: number;
+  tilt: number;
   wetnessSpread: number;
 };
+
+// Simulation model after David Small, "Modeling Watercolor by Simulating
+// Diffusion, Pigment, and Paper Fibers" (MIT Media Lab, Visible Language
+// Workshop). Each cell carries a SURFACE layer (paint sitting on top of the
+// paper, still mobile: CMY pigment in rgb, water in a) and an INFUSED layer
+// (paint soaked into the fibers: CMY in rgb, water in a). Per frame:
+//   1. force-field pass — per-axis displacement force on the surface water:
+//      D = g·water (tilt gravity) + s·Σ(water±n)/n (surface tension)
+//      + sp·(water−1 − water+1) (spreading), eq [1] of the paper.
+//   2. simulation pass (MRT) — surface advection by the force field (eqs
+//      [2]–[5], pigment rides with the water), brush deposit (additive CMY —
+//      no per-pigment asymptote, so repeated strokes keep darkening), infused
+//      diffusion gated by dampness and paper absorbency (eqs [6]–[8]),
+//      absorption surface→infused with capacity clamp and granulation-weighted
+//      settling (eqs [9]–[10]), evaporation ∝ drying speed.
+//   3. composite pass — subtractive render: paper − (CMY_surface + CMY_infused),
+//      eqs [11]–[13], plus relief shading, wet sheen, and soft edge darkening.
 
 // Multiply/fract-based hash: avoids sin()/trig, which is comparatively
 // expensive on both mobile GPUs and software (SwiftShader-class) renderers.
@@ -42,7 +60,8 @@ float toolcraftNoise(vec2 p) {
 
 // Only needed where the paper heightmap is actually computed from noise (the
 // precomputed paper-height pass below); the simulation/composite passes
-// instead sample the cached uPaperHeight texture.
+// instead sample the cached uPaperHeight texture. Height doubles as the
+// paper-fiber absorbency field: cavities (low height) soak up more paint.
 const PAPER_HEIGHT_GLSL = `
 float toolcraftPaperHeight(vec2 uv, float roughness, float relief, vec2 resolution) {
   float aspect = resolution.x / max(resolution.y, 1.0);
@@ -64,10 +83,18 @@ void main() {
 }
 `;
 
-// Paper height only depends on roughness/relief/resolution, not on the live
-// simulation state, so it is precomputed once into a texture instead of being
-// recomputed from noise on every animation frame in both the simulation and
-// composite passes.
+// GLSL ES 3.00 twin of the vertex shader, required by the MRT simulation
+// program (multiple render targets need #version 300 es fragment outputs, and
+// both shaders in a program must share the version).
+const VERTEX_SHADER_300_SOURCE = `#version 300 es
+in vec2 aPosition;
+out vec2 vUv;
+void main() {
+  vUv = aPosition * 0.5 + 0.5;
+  gl_Position = vec4(aPosition, 0.0, 1.0);
+}
+`;
+
 const PAPER_HEIGHT_FRAGMENT_SHADER_SOURCE = `
 precision highp float;
 varying vec2 vUv;
@@ -85,11 +112,75 @@ void main() {
 }
 `;
 
-const SIMULATION_FRAGMENT_SHADER_SOURCE = `
+// Displacement-force pass (paper eq [1]) over the surface-water field.
+// Writes (Dx, Dy) per cell: the signed fraction of this cell's surface
+// material that wants to move one texel along each axis this step.
+const FORCE_FRAGMENT_SHADER_SOURCE = `
 precision highp float;
 varying vec2 vUv;
 
-uniform sampler2D uPrev;
+uniform sampler2D uSurface;
+uniform vec2 uTexel;
+uniform float uDt;
+uniform float uTilt;
+uniform float uWetnessSpread;
+
+float surfaceWater(vec2 offset) {
+  return texture2D(uSurface, vUv + offset * uTexel).a;
+}
+
+void main() {
+  float w0 = surfaceWater(vec2(0.0));
+
+  // Normalize to a 60 steps/second reference so flow speed is frame-rate
+  // independent; the outflow clamp below keeps large steps stable.
+  float timeScale = clamp(uDt * 60.0, 0.25, 6.0);
+
+  // Coefficients: tension pulls water toward nearby water (balls up / merges
+  // adjacent wet strokes); spreading pushes from high to low (pressure);
+  // gravity pulls down-screen (vUv.y = 1 is the top of the canvas).
+  float tension = 0.050 * (0.35 + uWetnessSpread) * timeScale;
+  float spread = 0.11 * (0.30 + uWetnessSpread) * timeScale;
+  float gravity = 0.42 * uTilt * timeScale;
+
+  float dx = 0.0;
+  float dy = 0.0;
+
+  for (int n = 1; n <= 4; n += 1) {
+    float fn = float(n);
+    float inv = 1.0 / fn;
+    dx += tension * inv * (surfaceWater(vec2(fn, 0.0)) - surfaceWater(vec2(-fn, 0.0)));
+    dy += tension * inv * (surfaceWater(vec2(0.0, fn)) - surfaceWater(vec2(0.0, -fn)));
+  }
+
+  dx += spread * (surfaceWater(vec2(-1.0, 0.0)) - surfaceWater(vec2(1.0, 0.0)));
+  dy += spread * (surfaceWater(vec2(0.0, -1.0)) - surfaceWater(vec2(0.0, 1.0)));
+  dy -= gravity * w0;
+
+  // A cell cannot move more material than it holds: cap total outflow.
+  float total = abs(dx) + abs(dy);
+  if (total > 0.9) {
+    float scale = 0.9 / total;
+    dx *= scale;
+    dy *= scale;
+  }
+
+  gl_FragColor = vec4(dx, dy, 0.0, 1.0);
+}
+`;
+
+// Combined update pass (MRT): advects the surface layer by the force field,
+// deposits from the brush, diffuses the infused layer (dampness-gated),
+// transfers surface → infused (absorption), and evaporates water.
+const SIMULATION_FRAGMENT_SHADER_SOURCE = `#version 300 es
+precision highp float;
+in vec2 vUv;
+layout(location = 0) out vec4 outSurface;
+layout(location = 1) out vec4 outInfused;
+
+uniform sampler2D uSurface;
+uniform sampler2D uInfused;
+uniform sampler2D uForce;
 uniform sampler2D uPaperHeight;
 uniform vec2 uTexel;
 uniform vec2 uResolution;
@@ -97,7 +188,6 @@ uniform float uDt;
 
 uniform float uWetnessSpread;
 uniform float uGranulation;
-uniform float uEdgeDarkening;
 uniform float uPigmentOpacity;
 uniform float uDryingSpeed;
 
@@ -108,7 +198,8 @@ uniform float uBrushRadius;
 uniform int uBrushShape;
 uniform float uBrushHairNoise;
 uniform float uBrushCharge;
-uniform vec3 uDepositColor;
+uniform vec3 uDepositCmy;
+uniform bool uDepositIsWater;
 uniform bool uDepositIsWhite;
 
 ${NOISE_GLSL}
@@ -121,10 +212,33 @@ float toolcraftDistToSegment(vec2 p, vec2 a, vec2 b) {
 }
 
 void main() {
-  vec4 current = texture2D(uPrev, vUv);
-  vec3 absorption = current.rgb;
-  float wetness = current.a;
+  vec2 dx = vec2(uTexel.x, 0.0);
+  vec2 dy = vec2(0.0, uTexel.y);
 
+  vec4 surface0 = texture(uSurface, vUv);
+  vec4 infused0 = texture(uInfused, vUv);
+  float height = texture(uPaperHeight, vUv).r;
+
+  // Absorbency: cavities (low height) soak faster than ridges — the per-cell
+  // variation of this field is what makes the paper texture show in a wash.
+  float absorbency = mix(1.2, 0.65, height);
+
+  // --- 1. Surface advection (paper eqs [2]-[5]) ------------------------------
+  vec2 force0 = texture(uForce, vUv).rg;
+  float outFrac = min(abs(force0.x) + abs(force0.y), 0.95);
+  vec4 surface1 = surface0 * (1.0 - outFrac);
+
+  vec2 forceL = texture(uForce, vUv - dx).rg;
+  vec2 forceR = texture(uForce, vUv + dx).rg;
+  vec2 forceD = texture(uForce, vUv - dy).rg;
+  vec2 forceU = texture(uForce, vUv + dy).rg;
+
+  surface1 += texture(uSurface, vUv - dx) * max(forceL.x, 0.0);
+  surface1 += texture(uSurface, vUv + dx) * max(-forceR.x, 0.0);
+  surface1 += texture(uSurface, vUv - dy) * max(forceD.y, 0.0);
+  surface1 += texture(uSurface, vUv + dy) * max(-forceU.y, 0.0);
+
+  // --- 2. Brush deposit ------------------------------------------------------
   if (uBrushActive && uBrushCharge > 0.001) {
     float d = toolcraftDistToSegment(vUv, uBrushPrevPos, uBrushPos);
 
@@ -134,48 +248,114 @@ void main() {
     }
 
     float shapeRadius = uBrushShape == 1 ? uBrushRadius * 0.82 : uBrushRadius;
+    // Low-frequency bristle variation: hog breaks the stroke subtly without the
+    // per-pixel high-frequency noise that made edges look grainy.
     float hairJitter =
-      (toolcraftNoise(vUv * uResolution * 0.75) - 0.5) * uBrushHairNoise * shapeRadius;
-    float mask = 1.0 - smoothstep(shapeRadius * 0.55, shapeRadius + hairJitter, d);
+      (toolcraftNoise(vUv * uResolution * 0.16) - 0.5) * uBrushHairNoise * shapeRadius;
+    float mask = 1.0 - smoothstep(shapeRadius * 0.45, shapeRadius + hairJitter, d);
     mask = clamp(mask, 0.0, 1.0) * uBrushCharge;
 
     if (mask > 0.0) {
-      wetness = clamp(wetness + mask, 0.0, 1.0);
-      float strength = mask * mix(0.12, 0.85, uPigmentOpacity);
-
-      if (uDepositIsWhite) {
-        absorption = mix(absorption, vec3(0.0), strength);
+      // Deposit rates are per-second (scaled by uDt) so stroke density is
+      // frame-rate independent and consecutive per-frame stamp overlaps do not
+      // bead into darker dots along the stroke.
+      if (uDepositIsWater) {
+        // Clear water: wets the paper and re-dissolves a little settled
+        // pigment back into the mobile surface layer (re-wetting dry paint).
+        surface1.a = min(surface1.a + mask * 26.0 * uDt, 2.5);
+        vec3 lifted = infused0.rgb * min(mask * 2.6 * uDt, 0.5);
+        infused0.rgb -= lifted;
+        surface1.rgb += lifted;
+      } else if (uDepositIsWhite) {
+        // Body-colour white: lifts/covers pigment rather than adding to it
+        // (subtractive white would be a no-op).
+        float strength = clamp(mask * mix(6.0, 34.0, uPigmentOpacity) * uDt, 0.0, 0.9);
+        surface1.rgb *= (1.0 - strength);
+        infused0.rgb *= (1.0 - strength * 0.5);
       } else {
-        absorption = absorption + (uDepositColor - absorption) * strength;
+        // Additive pigment concentration — repeated strokes keep building
+        // density instead of chasing a per-pigment asymptote.
+        float concentration = mix(2.0, 14.0, uPigmentOpacity);
+        surface1.rgb += uDepositCmy * (mask * concentration * uDt);
+        surface1.a = min(surface1.a + mask * 18.0 * uDt, 2.5);
       }
     }
   }
 
-  vec4 sN = texture2D(uPrev, vUv + vec2(0.0, uTexel.y));
-  vec4 sS = texture2D(uPrev, vUv - vec2(0.0, uTexel.y));
-  vec4 sE = texture2D(uPrev, vUv + vec2(uTexel.x, 0.0));
-  vec4 sW = texture2D(uPrev, vUv - vec2(uTexel.x, 0.0));
+  // --- 3. Infused diffusion (paper eqs [6]-[8], dampness-gated) --------------
+  vec4 infusedN = texture(uInfused, vUv + dy);
+  vec4 infusedS = texture(uInfused, vUv - dy);
+  vec4 infusedE = texture(uInfused, vUv + dx);
+  vec4 infusedW = texture(uInfused, vUv - dx);
 
-  vec3 neighborAbsorption = (sN.rgb + sS.rgb + sE.rgb + sW.rgb) * 0.25;
-  float neighborWetness = (sN.a + sS.a + sE.a + sW.a) * 0.25;
-  float diffuseAmount = clamp(uWetnessSpread * 0.6 * wetness, 0.0, 0.5);
-  absorption = mix(absorption, neighborAbsorption, diffuseAmount);
-  wetness = mix(wetness, neighborWetness, diffuseAmount * 0.5);
+  float heightN = texture(uPaperHeight, vUv + dy).r;
+  float heightS = texture(uPaperHeight, vUv - dy).r;
+  float heightE = texture(uPaperHeight, vUv + dx).r;
+  float heightW = texture(uPaperHeight, vUv - dx).r;
 
-  float height = texture2D(uPaperHeight, vUv).r;
-  float granulationTerm = uGranulation * wetness * (0.5 - height);
-  absorption = clamp(absorption + granulationTerm * 0.18, 0.0, 1.0);
+  // Frame-rate independent diffusion, clamped for explicit-step stability
+  // (4-neighbour exchange must keep the per-pair coefficient well below 0.25).
+  float timeScale = clamp(uDt * 60.0, 0.25, 6.0);
+  float diffusion = min((0.028 + 0.085 * uWetnessSpread) * timeScale, 0.16);
+  vec4 infused1 = infused0;
 
-  float wetGrad = abs(sN.a - sS.a) + abs(sE.a - sW.a);
-  float edge =
-    uEdgeDarkening * wetGrad * smoothstep(0.05, 0.35, wetness) *
-    (1.0 - smoothstep(0.4, 0.9, wetness));
-  absorption = clamp(absorption + edge * 0.45, 0.0, 1.0);
+  // Symmetric pair coefficients keep flux antisymmetric between neighbours so
+  // total water/pigment mass is conserved by the exchange.
+  float aN = mix(1.2, 0.65, 0.5 * (height + heightN));
+  float aS = mix(1.2, 0.65, 0.5 * (height + heightS));
+  float aE = mix(1.2, 0.65, 0.5 * (height + heightE));
+  float aW = mix(1.2, 0.65, 0.5 * (height + heightW));
 
-  float dryRate = mix(0.05, 2.4, uDryingSpeed) * uDt;
-  wetness = clamp(wetness - dryRate, 0.0, 1.0);
+  infused1.a += diffusion * (
+    aN * (infusedN.a - infused0.a) +
+    aS * (infusedS.a - infused0.a) +
+    aE * (infusedE.a - infused0.a) +
+    aW * (infusedW.a - infused0.a)
+  );
 
-  gl_FragColor = vec4(absorption, wetness);
+  // Pigment only moves through damp fiber: gate each pair by the drier side.
+  float dampN = clamp(min(infused0.a, infusedN.a) * 3.0, 0.0, 1.0);
+  float dampS = clamp(min(infused0.a, infusedS.a) * 3.0, 0.0, 1.0);
+  float dampE = clamp(min(infused0.a, infusedE.a) * 3.0, 0.0, 1.0);
+  float dampW = clamp(min(infused0.a, infusedW.a) * 3.0, 0.0, 1.0);
+
+  infused1.rgb += diffusion * (
+    aN * dampN * (infusedN.rgb - infused0.rgb) +
+    aS * dampS * (infusedS.rgb - infused0.rgb) +
+    aE * dampE * (infusedE.rgb - infused0.rgb) +
+    aW * dampW * (infusedW.rgb - infused0.rgb)
+  );
+
+  // --- 4. Absorption surface -> infused (paper eqs [9]-[10]) -----------------
+  float capacity = mix(1.35, 0.6, height);
+  float absorbed = min(0.10 * timeScale, 0.55) * absorbency * surface1.a;
+  absorbed = min(absorbed, max(0.0, capacity - infused1.a));
+
+  float absorbFrac = surface1.a > 1e-5 ? absorbed / surface1.a : 0.0;
+  // Granulation: pigment preferentially settles into cavities as it is
+  // absorbed — dried-wash texture instead of grainy wet edges.
+  float settleFrac = min(absorbFrac * mix(1.0, clamp(1.7 - 1.4 * height, 0.4, 1.7), uGranulation), 1.0);
+
+  vec3 settled = surface1.rgb * settleFrac;
+  infused1.a += absorbed;
+  infused1.rgb += settled;
+  surface1.a -= absorbed;
+  surface1.rgb -= settled;
+
+  // Paint left on the surface after its water is gone dries onto the paper.
+  if (surface1.a < 0.02) {
+    vec3 driedOn = surface1.rgb * min(0.12 * timeScale, 0.5);
+    infused1.rgb += driedOn;
+    surface1.rgb -= driedOn;
+  }
+
+  // --- 5. Evaporation --------------------------------------------------------
+  float evaporation = uDt * mix(0.02, 1.1, uDryingSpeed);
+  surface1.a = max(surface1.a - evaporation * 0.9, 0.0);
+  infused1.a = max(infused1.a - evaporation * 0.45, 0.0);
+
+  outSurface = clamp(surface1, vec4(0.0), vec4(vec3(4.0), 2.5));
+  outInfused = clamp(infused1, vec4(0.0), vec4(vec3(4.0), 2.0));
 }
 `;
 
@@ -187,25 +367,38 @@ const COMPOSITE_FRAGMENT_SHADER_SOURCE = `
 precision highp float;
 varying vec2 vUv;
 
-uniform sampler2D uState;
+uniform sampler2D uSurface;
+uniform sampler2D uInfused;
 uniform sampler2D uPaperHeight;
+uniform vec2 uTexel;
 uniform vec3 uBackgroundColor;
 uniform bool uIncludeBackground;
+uniform float uEdgeDarkening;
 
 void main() {
-  vec4 state = texture2D(uState, vUv);
-  vec3 absorption = state.rgb;
+  vec4 surface = texture2D(uSurface, vUv);
+  vec4 infused = texture2D(uInfused, vUv);
   float height = texture2D(uPaperHeight, vUv).r;
 
+  vec3 pigment = surface.rgb + infused.rgb;
+
+  // Soft edge darkening at the wet/dry boundary of the infused layer:
+  // scales the pigment already present instead of injecting noise.
+  float wetGrad =
+    abs(texture2D(uInfused, vUv + vec2(0.0, uTexel.y)).a - texture2D(uInfused, vUv - vec2(0.0, uTexel.y)).a) +
+    abs(texture2D(uInfused, vUv + vec2(uTexel.x, 0.0)).a - texture2D(uInfused, vUv - vec2(uTexel.x, 0.0)).a);
+  pigment *= 1.0 + uEdgeDarkening * min(wetGrad * 2.2, 1.0) * 0.55;
+
   if (uIncludeBackground) {
-    vec3 lightPaper = clamp(uBackgroundColor + vec3(0.06, 0.07, 0.10), 0.0, 1.0);
-    vec3 paperColor = mix(uBackgroundColor, lightPaper, height);
-    vec3 color = paperColor * (1.0 - clamp(absorption, 0.0, 1.0) * 0.88);
-    color += state.a * 0.04;
+    // Relief shading strong enough that the paper texture reads on a blank
+    // canvas, not only through a wash.
+    vec3 paperColor = uBackgroundColor * mix(0.88, 1.08, height);
+    vec3 color = clamp(paperColor - pigment, 0.0, 1.0);
+    color += min(surface.a, 1.0) * 0.05;
     gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
   } else {
-    float coverage = clamp(max(absorption.r, max(absorption.g, absorption.b)) * 1.15, 0.0, 1.0);
-    vec3 inkColor = vec3(1.0) * (1.0 - clamp(absorption, 0.0, 1.0) * 0.92) + state.a * 0.04;
+    float coverage = clamp(max(pigment.r, max(pigment.g, pigment.b)) * 1.25, 0.0, 1.0);
+    vec3 inkColor = clamp(vec3(1.0) - pigment, 0.0, 1.0) + min(surface.a, 1.0) * 0.04;
     gl_FragColor = vec4(clamp(inkColor, 0.0, 1.0), coverage);
   }
 }
@@ -281,6 +474,8 @@ function createPaperHeightTexture(
   return texture;
 }
 
+// Simulation state lives in half-float textures: additive pigment mass and
+// small per-step displacement fluxes both quantize away at 8 bits.
 function createStateTexture(
   gl: WebGL2RenderingContext,
   width: number,
@@ -293,19 +488,9 @@ function createStateTexture(
   }
 
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texImage2D(
-    gl.TEXTURE_2D,
-    0,
-    gl.RGBA,
-    width,
-    height,
-    0,
-    gl.RGBA,
-    gl.UNSIGNED_BYTE,
-    new Uint8Array(width * height * 4),
-  );
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, width, height, 0, gl.RGBA, gl.HALF_FLOAT, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
@@ -329,9 +514,30 @@ function createFramebuffer(
   return framebuffer;
 }
 
-type PingPongTarget = {
+function createMrtFramebuffer(
+  gl: WebGL2RenderingContext,
+  surfaceTexture: WebGLTexture,
+  infusedTexture: WebGLTexture,
+): WebGLFramebuffer {
+  const framebuffer = gl.createFramebuffer();
+
+  if (!framebuffer) {
+    throw new Error("Toolcraft watercolour renderer could not create a framebuffer.");
+  }
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, surfaceTexture, 0);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, infusedTexture, 0);
+  gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+  return framebuffer;
+}
+
+type SimulationTarget = {
   framebuffer: WebGLFramebuffer;
-  texture: WebGLTexture;
+  infusedTexture: WebGLTexture;
+  surfaceTexture: WebGLTexture;
 };
 
 const brushShapeCode: Record<BrushShape, number> = {
@@ -349,6 +555,8 @@ export class WatercolorEngine {
 
   private compositeProgram: WebGLProgram;
 
+  private forceProgram: WebGLProgram;
+
   private paperProgram: WebGLProgram;
 
   private paperHeightTexture: WebGLTexture;
@@ -359,7 +567,11 @@ export class WatercolorEngine {
 
   private paperReliefHeight: number;
 
-  private targets: [PingPongTarget, PingPongTarget];
+  private targets: [SimulationTarget, SimulationTarget];
+
+  private forceTexture: WebGLTexture;
+
+  private forceFramebuffer: WebGLFramebuffer;
 
   private readIndex = 0;
 
@@ -376,6 +588,10 @@ export class WatercolorEngine {
   private brushPrevPos: [number, number] = [0, 0];
 
   private brushCharge = 1;
+
+  private hasContent = false;
+
+  private lastStrokeTime = 0;
 
   private lastFrameTime = 0;
 
@@ -407,6 +623,12 @@ export class WatercolorEngine {
       throw new Error("Toolcraft watercolour renderer requires WebGL2.");
     }
 
+    if (!gl.getExtension("EXT_color_buffer_float")) {
+      throw new Error(
+        "Toolcraft watercolour renderer requires the EXT_color_buffer_float WebGL2 extension for half-float simulation state.",
+      );
+    }
+
     this.gl = gl;
     this.params = initialParams;
 
@@ -426,13 +648,18 @@ export class WatercolorEngine {
 
     this.simulationProgram = createProgram(
       gl,
-      VERTEX_SHADER_SOURCE,
+      VERTEX_SHADER_300_SOURCE,
       SIMULATION_FRAGMENT_SHADER_SOURCE,
     );
     this.compositeProgram = createProgram(
       gl,
       VERTEX_SHADER_SOURCE,
       COMPOSITE_FRAGMENT_SHADER_SOURCE,
+    );
+    this.forceProgram = createProgram(
+      gl,
+      VERTEX_SHADER_SOURCE,
+      FORCE_FRAGMENT_SHADER_SOURCE,
     );
     this.paperProgram = createProgram(
       gl,
@@ -441,6 +668,8 @@ export class WatercolorEngine {
     );
 
     this.targets = this.createTargets(width, height);
+    this.forceTexture = createStateTexture(gl, width, height);
+    this.forceFramebuffer = createFramebuffer(gl, this.forceTexture);
     this.width = width;
     this.height = height;
 
@@ -474,15 +703,29 @@ export class WatercolorEngine {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
-  private createTargets(width: number, height: number): [PingPongTarget, PingPongTarget] {
+  private createTargets(width: number, height: number): [SimulationTarget, SimulationTarget] {
     const gl = this.gl;
-    const makeTarget = (): PingPongTarget => {
-      const texture = createStateTexture(gl, width, height);
-      const framebuffer = createFramebuffer(gl, texture);
-      return { framebuffer, texture };
+    const makeTarget = (): SimulationTarget => {
+      const surfaceTexture = createStateTexture(gl, width, height);
+      const infusedTexture = createStateTexture(gl, width, height);
+      const framebuffer = createMrtFramebuffer(gl, surfaceTexture, infusedTexture);
+      return { framebuffer, infusedTexture, surfaceTexture };
     };
 
     return [makeTarget(), makeTarget()];
+  }
+
+  private deleteTargets(): void {
+    const gl = this.gl;
+
+    for (const target of this.targets) {
+      gl.deleteFramebuffer(target.framebuffer);
+      gl.deleteTexture(target.surfaceTexture);
+      gl.deleteTexture(target.infusedTexture);
+    }
+
+    gl.deleteFramebuffer(this.forceFramebuffer);
+    gl.deleteTexture(this.forceTexture);
   }
 
   resize(width: number, height: number): void {
@@ -495,14 +738,13 @@ export class WatercolorEngine {
     }
 
     const gl = this.gl;
-    gl.deleteFramebuffer(this.targets[0].framebuffer);
-    gl.deleteFramebuffer(this.targets[1].framebuffer);
-    gl.deleteTexture(this.targets[0].texture);
-    gl.deleteTexture(this.targets[1].texture);
+    this.deleteTargets();
     gl.deleteFramebuffer(this.paperHeightFramebuffer);
     gl.deleteTexture(this.paperHeightTexture);
 
     this.targets = this.createTargets(width, height);
+    this.forceTexture = createStateTexture(gl, width, height);
+    this.forceFramebuffer = createFramebuffer(gl, this.forceTexture);
     this.width = width;
     this.height = height;
     this.readIndex = 0;
@@ -534,11 +776,14 @@ export class WatercolorEngine {
     this.brushPos = [uvX, uvY];
     this.brushPrevPos = [uvX, uvY];
     this.brushActive = true;
+    this.hasContent = true;
+    this.lastStrokeTime = performance.now();
   }
 
   moveStroke(uvX: number, uvY: number): void {
     this.brushPos = [uvX, uvY];
     this.brushActive = true;
+    this.lastStrokeTime = performance.now();
   }
 
   endStroke(): void {
@@ -547,6 +792,7 @@ export class WatercolorEngine {
 
   clear(): void {
     const gl = this.gl;
+    this.hasContent = false;
 
     for (const target of this.targets) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
@@ -555,7 +801,35 @@ export class WatercolorEngine {
       gl.clear(gl.COLOR_BUFFER_BIT);
     }
 
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.forceFramebuffer);
+    gl.viewport(0, 0, this.width, this.height);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  private drawForceField(dt: number): void {
+    const gl = this.gl;
+    const readTarget = this.targets[this.readIndex];
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.forceFramebuffer);
+    gl.viewport(0, 0, this.width, this.height);
+    gl.useProgram(this.forceProgram);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, readTarget.surfaceTexture);
+
+    const program = this.forceProgram;
+    this.bindQuad(program);
+
+    gl.uniform1i(gl.getUniformLocation(program, "uSurface"), 0);
+    gl.uniform2f(gl.getUniformLocation(program, "uTexel"), 1 / this.width, 1 / this.height);
+    gl.uniform1f(gl.getUniformLocation(program, "uDt"), dt);
+    gl.uniform1f(gl.getUniformLocation(program, "uTilt"), this.params.tilt);
+    gl.uniform1f(gl.getUniformLocation(program, "uWetnessSpread"), this.params.wetnessSpread);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
   private drawSimulationStep(dt: number): void {
@@ -568,22 +842,27 @@ export class WatercolorEngine {
     gl.useProgram(this.simulationProgram);
 
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, readTarget.texture);
+    gl.bindTexture(gl.TEXTURE_2D, readTarget.surfaceTexture);
     gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, readTarget.infusedTexture);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.forceTexture);
+    gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, this.paperHeightTexture);
 
     const program = this.simulationProgram;
     this.bindQuad(program);
 
-    gl.uniform1i(gl.getUniformLocation(program, "uPrev"), 0);
-    gl.uniform1i(gl.getUniformLocation(program, "uPaperHeight"), 1);
+    gl.uniform1i(gl.getUniformLocation(program, "uSurface"), 0);
+    gl.uniform1i(gl.getUniformLocation(program, "uInfused"), 1);
+    gl.uniform1i(gl.getUniformLocation(program, "uForce"), 2);
+    gl.uniform1i(gl.getUniformLocation(program, "uPaperHeight"), 3);
     gl.uniform2f(gl.getUniformLocation(program, "uTexel"), 1 / this.width, 1 / this.height);
     gl.uniform2f(gl.getUniformLocation(program, "uResolution"), this.width, this.height);
     gl.uniform1f(gl.getUniformLocation(program, "uDt"), dt);
 
     gl.uniform1f(gl.getUniformLocation(program, "uWetnessSpread"), this.params.wetnessSpread);
     gl.uniform1f(gl.getUniformLocation(program, "uGranulation"), this.params.granulation);
-    gl.uniform1f(gl.getUniformLocation(program, "uEdgeDarkening"), this.params.edgeDarkening);
     gl.uniform1f(gl.getUniformLocation(program, "uPigmentOpacity"), this.params.pigmentOpacity);
     gl.uniform1f(gl.getUniformLocation(program, "uDryingSpeed"), this.params.dryingSpeed);
 
@@ -599,14 +878,18 @@ export class WatercolorEngine {
     gl.uniform1i(gl.getUniformLocation(program, "uBrushShape"), brushShapeCode[this.params.brushShape]);
     gl.uniform1f(
       gl.getUniformLocation(program, "uBrushHairNoise"),
-      this.params.brushHairType === "hog" ? 0.75 : 0.12,
+      this.params.brushHairType === "hog" ? 0.6 : 0.1,
     );
     gl.uniform1f(gl.getUniformLocation(program, "uBrushCharge"), this.brushCharge);
 
-    // uDepositColor is a subtractive-absorption color: how strongly each channel is
-    // absorbed (removed) by this pigment, i.e. the complement of its visible hue.
+    // uDepositCmy is the pigment's subtractive concentration per channel: the
+    // complement of its visible hue (paper eq [11]-[13] renders paper − CMY).
     const [r, g, b] = hexToRgb01(this.params.pigmentHex);
-    gl.uniform3f(gl.getUniformLocation(program, "uDepositColor"), 1 - r, 1 - g, 1 - b);
+    gl.uniform3f(gl.getUniformLocation(program, "uDepositCmy"), 1 - r, 1 - g, 1 - b);
+    gl.uniform1i(
+      gl.getUniformLocation(program, "uDepositIsWater"),
+      isWaterPigment(this.params.pigmentHex) ? 1 : 0,
+    );
     gl.uniform1i(
       gl.getUniformLocation(program, "uDepositIsWhite"),
       isWhitePigment(this.params.pigmentHex) ? 1 : 0,
@@ -624,16 +907,22 @@ export class WatercolorEngine {
     gl.viewport(0, 0, width, height);
     gl.useProgram(this.compositeProgram);
 
+    const readTarget = this.targets[this.readIndex];
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.targets[this.readIndex].texture);
+    gl.bindTexture(gl.TEXTURE_2D, readTarget.surfaceTexture);
     gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, readTarget.infusedTexture);
+    gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this.paperHeightTexture);
 
     const program = this.compositeProgram;
     this.bindQuad(program);
 
-    gl.uniform1i(gl.getUniformLocation(program, "uState"), 0);
-    gl.uniform1i(gl.getUniformLocation(program, "uPaperHeight"), 1);
+    gl.uniform1i(gl.getUniformLocation(program, "uSurface"), 0);
+    gl.uniform1i(gl.getUniformLocation(program, "uInfused"), 1);
+    gl.uniform1i(gl.getUniformLocation(program, "uPaperHeight"), 2);
+    gl.uniform2f(gl.getUniformLocation(program, "uTexel"), 1 / this.width, 1 / this.height);
+    gl.uniform1f(gl.getUniformLocation(program, "uEdgeDarkening"), this.params.edgeDarkening);
 
     const [bgR, bgG, bgB] = hexToRgb01(this.params.backgroundColor);
     gl.uniform3f(gl.getUniformLocation(program, "uBackgroundColor"), bgR, bgG, bgB);
@@ -662,7 +951,18 @@ export class WatercolorEngine {
     const dt = Math.min(0.1, (now - this.lastFrameTime) / 1000);
     this.lastFrameTime = now;
 
-    this.drawSimulationStep(dt);
+    // Idle skip: once every stroke has fully dried the simulation state is
+    // frozen (all rates are gated by water), so the force/simulation passes
+    // only run while there is content and recent stroke activity. 90 s covers
+    // full evaporation even at the slowest drying speed.
+    const simulationActive =
+      this.hasContent && (this.brushActive || now - this.lastStrokeTime < 90_000);
+
+    if (simulationActive) {
+      this.drawForceField(dt);
+      this.drawSimulationStep(dt);
+    }
+
     this.drawComposite(null, this.width, this.height);
 
     this.rafHandle = requestAnimationFrame(this.tick);
@@ -710,14 +1010,12 @@ export class WatercolorEngine {
     }
 
     const gl = this.gl;
-    gl.deleteFramebuffer(this.targets[0].framebuffer);
-    gl.deleteFramebuffer(this.targets[1].framebuffer);
-    gl.deleteTexture(this.targets[0].texture);
-    gl.deleteTexture(this.targets[1].texture);
+    this.deleteTargets();
     gl.deleteFramebuffer(this.paperHeightFramebuffer);
     gl.deleteTexture(this.paperHeightTexture);
     gl.deleteProgram(this.simulationProgram);
     gl.deleteProgram(this.compositeProgram);
+    gl.deleteProgram(this.forceProgram);
     gl.deleteProgram(this.paperProgram);
     gl.deleteBuffer(this.quadBuffer);
   }

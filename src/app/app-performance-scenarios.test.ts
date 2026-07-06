@@ -76,8 +76,12 @@ describe("watercolour app performance scenarios are well-formed", () => {
     expect(getScenario("hair-type-control-change").target).toBe("brush.hairType");
   });
 
-  test("perf: brush-water-refresh-control-change scenario is well-formed", () => {
-    expect(getScenario("brush-water-refresh-control-change").target).toBe("brush.waterCharge");
+  test("perf: tilt-control-drag scenario is well-formed", () => {
+    expect(getScenario("tilt-control-drag").target).toBe("dynamics.tilt");
+  });
+
+  test("perf: paper-preset-control-change scenario is well-formed", () => {
+    expect(getScenario("paper-preset-control-change").target).toBe("paper.texturePreset");
   });
 
   test("perf: mixing-area-control-change scenario is well-formed", () => {

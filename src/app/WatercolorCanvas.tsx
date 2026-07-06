@@ -13,7 +13,6 @@ const DEFAULT_BACKGROUND_COLOR = "#f5eede";
 export type WatercolorCanvasApi = {
   clear: () => void;
   getCompositeCanvas: () => HTMLCanvasElement | null;
-  refreshWater: () => void;
 };
 
 export type WatercolorCanvasProps = {
@@ -77,6 +76,7 @@ export function WatercolorCanvas({ apiRef }: WatercolorCanvasProps): React.JSX.E
   const granulation = ((state.values["dynamics.granulation"] as number | undefined) ?? 35) / 100;
   const edgeDarkening = ((state.values["dynamics.edgeDarkening"] as number | undefined) ?? 45) / 100;
   const pigmentOpacity = ((state.values["dynamics.pigmentOpacity"] as number | undefined) ?? 55) / 100;
+  const tilt = ((state.values["dynamics.tilt"] as number | undefined) ?? 0) / 100;
   const currentPigment = getCurrentPigmentValue(state.values["paint.currentPigmentColor"]);
   const backgroundColor = getColorHexValue(
     state.values["appearance.background"],
@@ -122,6 +122,7 @@ export function WatercolorCanvas({ apiRef }: WatercolorCanvasProps): React.JSX.E
       pigmentOpacity,
       reliefHeight,
       roughness,
+      tilt,
       wetnessSpread,
     };
   }
@@ -140,6 +141,7 @@ export function WatercolorCanvas({ apiRef }: WatercolorCanvasProps): React.JSX.E
     granulation,
     edgeDarkening,
     pigmentOpacity,
+    tilt,
     currentPigment.hex,
     backgroundColor,
     includeBackground,
@@ -159,9 +161,6 @@ export function WatercolorCanvas({ apiRef }: WatercolorCanvasProps): React.JSX.E
         engineRef.current?.clear();
       },
       getCompositeCanvas: () => engineRef.current?.getCompositeCanvas() ?? null,
-      refreshWater: () => {
-        engineRef.current?.setBrushCharge(1);
-      },
     }),
     [cssWidth, cssHeight],
   );
