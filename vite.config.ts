@@ -60,7 +60,7 @@ function toolcraftServerIdentityPlugin(): Plugin {
 }
 
 export default defineConfig({
-  base: process.env.GITHUB_PAGES === "true" ? "/Tool-craft/" : "/",
+  base: process.env.GITHUB_PAGES === "true" ? "/Watercolour/" : "/",
   plugins: [toolcraftServerIdentityPlugin(), tailwindcss(), react()],
   resolve: {
     alias: {
