@@ -177,7 +177,44 @@ This mirrors `rendererPipeline` in `src/app/app-performance.ts`.
 - Run: `pnpm build` passes.
 - Visual probe evidence (in-process Vite+Playwright, screenshots reviewed): wet-on-wet strokes blend; four same-colour passes build far darker than one (saturation cap gone); wet-over-dry retains the dried stroke's edge; the Water swatch re-wets and bleeds dried paint; maximum Tilt makes a wet blob sag/run down-screen; Rough vs Hot press presets visibly change blank-paper grain and write the sliders.
 
+### Iteration 3 (stroke deposition rework + Stroke spacing control)
+
+Decision trail for the "blotchy stroke" fix and the user-requested spacing control.
+
+- Problem (user report): strokes looked blotchy — a continuous band with evenly spaced darker dots along it.
+- Root cause (diagnosed with a beadiness probe): the brush deposit ran inside the per-frame simulation shader as a capsule from `uBrushPrevPos`→`uBrushPos`, and `drawSimulationStep` set `brushPrevPos = brushPos` at the end of every frame. Between pointer events (many animation frames per pointer sample) the brush sat still and re-stamped a stationary disk at the last sample every frame, building a dark dot at each pointer-sample position. Deposit cadence was tied to the render loop, not to motion.
+- Fix: **distance-based dab deposition.** `beginStroke`/`moveStroke` now walk the pointer path on the CPU and enqueue a dab every _Stroke spacing_ of arc length (sub-spacing remainder carried in `lastDabUv` across pointer events and frames). Each frame hands only that frame's new dab centres (`uDabCount`, `uDabCenters[MAX_DABS]`, MAX_DABS=64) to the `simulation-step` shader, which sums their soft masks additively; the queue is cleared after each frame so idle frames deposit nothing. Because each dab is deposited exactly once, total pigment depends on path length and spacing, not on frame rate — the beading is gone by construction. Removed `uBrushActive`/`uBrushPos`/`uBrushPrevPos` and the segment-distance helper from the deposit path; deposit amounts are no longer `uDt`-scaled (per-dab, fixed).
+- New control: **Stroke spacing** slider (Brush section, `brush.strokeSpacing`, 0–100 %, default 18). `dabSpacingUv = brushRadiusUv * (0.25 + 1.75 * strokeSpacing)`: low overlaps into a smooth continuous wash, high leaves separated dry-brush dabs — the "control over that spacing amount" the user asked for.
+- Coverage added in lockstep: Brush section inventory target, acceptance row + scenarios test + control-order list, performance control-drag target + scenario + scenarios test + browser perf test, renderer-plan deposit description, e2e acceptance test.
+
+#### Iteration 3 verification
+
+- Run: `pnpm typecheck` passes.
+- Run: `pnpm exec vitest run src` passes (270/270 across all five suites, including the updated control-order list and the new stroke-spacing acceptance/perf scenario tests).
+- Run: `pnpm exec playwright test e2e/app-performance.spec.ts e2e/app-browser-acceptance.spec.ts` (shared structural/meta-validators) passes, 18/18.
+- Run: `pnpm exec playwright test e2e/app-acceptance-watercolour.spec.ts --grep "stroke spacing|consecutive same-pigment|brush size drag|pigment swatch selection"` passes, 4/4 — the new Stroke spacing acceptance test, the same-pigment regression, brush size, and the pigment/water swatch test.
+- Run: `pnpm build` passes.
+- Visual probe evidence (in-process Playwright, beadiness = stddev of luminance along the stroke centreline, screenshots reviewed): at the default spacing the stroke is a smooth continuous band (std 0.018, down from the old ~0.092 blotchy baseline); at maximum spacing it is a clean row of evenly spaced dabs (std 0.078) — smooth-by-default and deliberately dotty at the top of the range.
+
+### Iteration 4 (fade control, mixing removal, wet-on-wet bleed + absorption controls)
+
+Four user-requested changes, shipped together on the same branch.
+
+- **Dry-brush fade control.** The brush-charge depletion per CSS pixel was a fixed constant; it is now scaled by a new **Dry-brush fade** slider (`brush.fade`, Brush section, default 20). 0 keeps a stroke at full strength end to end; higher values fade it to a dry-brush tail sooner. Wired in `WatercolorCanvas.tsx`'s pointer handler (runtime-adjacent charge state), not the schema-to-engine params.
+- **Removed the colour Mixing section.** Deleted the `mixingArea`/reset controls, the `MixingAreaControl` component and its renderer registration, the `mixing-reset` panel action, and all their acceptance/performance/section-inventory/scenario/e2e coverage. Pigment selection is unaffected (swatches still drive `paint.currentPigmentColor`).
+- **Wet-on-wet bleeding fixed.** Reported bug: pigment painted through a wet/water area stayed crisp instead of flowing into it. Diagnosed with a wetness-visualisation probe (composite temporarily output surface water = green, infused water = blue): a water wash barely persisted — surface water was absorbed into the infused layer within a frame or two and evaporation was so aggressive that only the last stroke of a wash survived, so there was never a lasting wet area to bleed into. Also found a counterproductive surface wet-diffusion term I had added was a strong negative Laplacian that nuked ~88% of an isolated stroke's surface water per frame; removed it. Fix: (1) slowed evaporation substantially, especially the infused (paper-dampness) decay, so a wash stays damp for several seconds; (2) generous absorption capacity so already-damp paper keeps absorbing; (3) pigment settling gated by local dryness so pigment stays mobile (and bleeds via the existing dampness-gated infused diffusion) while the paper is wet, and only sets as it dries. Probe result: red painted into a persistent damp band spreads 1.83× the area of the same stroke on dry paper, and screenshots show a soft feathered bloom in the wet area vs a crisp mark on dry paper.
+- **Absorption controls.** Exposed two new Paper sliders — **Water absorption** (`paper.waterAbsorption`, surface→infused water transfer rate) and **Paint absorption** (`paper.paintAbsorption`, pigment settling rate) — as `uWaterAbsorption`/`uPaintAbsorption` uniforms, so a painter can dial the wet-on-wet behaviour directly (low = more bleed/flow, high = crisper/faster set). The existing **Drying speed** slider (evaporation) covers the "paper drying / drying time" request; no redundant control added.
+
+#### Iteration 4 verification
+
+- Run: `pnpm typecheck` passes.
+- Run: `pnpm exec vitest run src` passes (272/272 across all five suites — control-order list, section inventories, and the new fade/absorption acceptance + perf scenario tests, minus the removed mixing tests).
+- Visual probe evidence (in-process Playwright, screenshots reviewed): stroke painted into a persistent wet band blooms/feathers (wet-on-wet), same stroke on dry paper stays crisp; wetness-field diagnostic confirmed a water wash now persists as damp paper for several seconds where before it evaporated almost immediately.
+- Structural meta-validators and targeted functional e2e (fade, absorption, spacing, same-pigment) plus `pnpm build`: see final run below.
+
 ## Risks
 
 - Risk: Scope is large (real-time GPU simulation, two custom controls, full acceptance/performance suites). Tracked via task list across the implementation session.
+- Risk (Iteration 4): the slower default evaporation means paint stays workable longer, which is the point, but a user who wants fast drying must raise Drying speed; the wider drying range keeps the fast end available.
 - Risk: The background-exclusion composite path (transparent pigment-only export) is a new shader branch layered onto the existing composite pass; it only activates when `export.includeBackground` is turned off, so the default (background included) visual output is unchanged.
+- Risk (Iteration 3): a single very fast pointer flick could enqueue more than MAX_DABS (64) dabs in one frame; the surplus is dropped that frame. In practice per-frame pointer travel on a normal canvas stays well under 64 dabs, and the arc-length cursor still advances so the next frame continues cleanly — accepted as a bounded, rare degradation rather than an unbounded uniform-array size.

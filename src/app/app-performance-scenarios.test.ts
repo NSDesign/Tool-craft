@@ -36,6 +36,14 @@ describe("watercolour app performance scenarios are well-formed", () => {
     expect(getScenario("canvas-height-control-change").target).toBe("canvas.size.height");
   });
 
+  test("perf: brush-stroke-spacing-control-drag scenario is well-formed", () => {
+    expect(getScenario("brush-stroke-spacing-control-drag").target).toBe("brush.strokeSpacing");
+  });
+
+  test("perf: brush-fade-control-drag scenario is well-formed", () => {
+    expect(getScenario("brush-fade-control-drag").target).toBe("brush.fade");
+  });
+
   test("perf: paper-roughness-control-drag scenario is well-formed", () => {
     expect(getScenario("paper-roughness-control-drag").target).toBe("paper.roughness");
   });
@@ -46,6 +54,14 @@ describe("watercolour app performance scenarios are well-formed", () => {
 
   test("perf: paper-drying-speed-control-drag scenario is well-formed", () => {
     expect(getScenario("paper-drying-speed-control-drag").target).toBe("paper.dryingSpeed");
+  });
+
+  test("perf: paper-water-absorption-control-drag scenario is well-formed", () => {
+    expect(getScenario("paper-water-absorption-control-drag").target).toBe("paper.waterAbsorption");
+  });
+
+  test("perf: paper-paint-absorption-control-drag scenario is well-formed", () => {
+    expect(getScenario("paper-paint-absorption-control-drag").target).toBe("paper.paintAbsorption");
   });
 
   test("perf: wetness-spread-control-drag scenario is well-formed", () => {
@@ -82,14 +98,6 @@ describe("watercolour app performance scenarios are well-formed", () => {
 
   test("perf: paper-preset-control-change scenario is well-formed", () => {
     expect(getScenario("paper-preset-control-change").target).toBe("paper.texturePreset");
-  });
-
-  test("perf: mixing-area-control-change scenario is well-formed", () => {
-    expect(getScenario("mixing-area-control-change").target).toBe("paint.mixingArea");
-  });
-
-  test("perf: mixing-reset-control-change scenario is well-formed", () => {
-    expect(getScenario("mixing-reset-control-change").target).toBe("paint.mixingArea.reset");
   });
 
   test("perf: export-include-background-control-change scenario is well-formed", () => {

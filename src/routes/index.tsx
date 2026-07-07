@@ -7,12 +7,10 @@ import {
 } from "@/toolcraft/runtime";
 
 import { appSchema } from "../app/app-schema";
-import { MixingAreaControl } from "../app/MixingAreaControl";
 import { PaintSwatchesControl } from "../app/PaintSwatchesControl";
 import { WatercolorCanvas, type WatercolorCanvasApi } from "../app/WatercolorCanvas";
 
 const controlRenderers = {
-  mixingArea: MixingAreaControl,
   paintSwatches: PaintSwatchesControl,
 };
 
@@ -60,15 +58,6 @@ export function AppHome(): React.JSX.Element {
               target: "paper.reliefHeight",
               type: "controls.setValue",
               value: preset.reliefHeight,
-            });
-            return;
-          }
-
-          case "mixing-reset": {
-            dispatch({
-              target: "paint.mixingArea",
-              type: "controls.setValue",
-              value: { pixels: null },
             });
             return;
           }
