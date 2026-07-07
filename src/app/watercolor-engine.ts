@@ -12,11 +12,14 @@ export type WatercolorParams = {
   edgeDarkening: number;
   granulation: number;
   includeBackground: boolean;
+  paintAbsorption: number;
   pigmentHex: string;
   pigmentOpacity: number;
   reliefHeight: number;
   roughness: number;
+  strokeSpacing: number;
   tilt: number;
+  waterAbsorption: number;
   wetnessSpread: number;
 };
 
@@ -172,8 +175,16 @@ void main() {
 // Combined update pass (MRT): advects the surface layer by the force field,
 // deposits from the brush, diffuses the infused layer (dampness-gated),
 // transfers surface → infused (absorption), and evaporates water.
+// Brush deposit is distance-based: the CPU walks the pointer path and places a
+// dab every uDabSpacing of arc length (carried across frames), then hands this
+// frame's new dab centres to the shader. Because dabs are spaced by distance,
+// not per animation frame, an idle-but-held brush deposits nothing (no beading
+// dots at pointer samples), and the spacing is directly user-controllable.
+const MAX_DABS = 64;
+
 const SIMULATION_FRAGMENT_SHADER_SOURCE = `#version 300 es
 precision highp float;
+#define MAX_DABS ${MAX_DABS}
 in vec2 vUv;
 layout(location = 0) out vec4 outSurface;
 layout(location = 1) out vec4 outInfused;
@@ -190,10 +201,11 @@ uniform float uWetnessSpread;
 uniform float uGranulation;
 uniform float uPigmentOpacity;
 uniform float uDryingSpeed;
+uniform float uWaterAbsorption;
+uniform float uPaintAbsorption;
 
-uniform bool uBrushActive;
-uniform vec2 uBrushPos;
-uniform vec2 uBrushPrevPos;
+uniform int uDabCount;
+uniform vec2 uDabCenters[MAX_DABS];
 uniform float uBrushRadius;
 uniform int uBrushShape;
 uniform float uBrushHairNoise;
@@ -203,13 +215,6 @@ uniform bool uDepositIsWater;
 uniform bool uDepositIsWhite;
 
 ${NOISE_GLSL}
-
-float toolcraftDistToSegment(vec2 p, vec2 a, vec2 b) {
-  vec2 pa = p - a;
-  vec2 ba = b - a;
-  float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
-  return length(pa - ba * h);
-}
 
 void main() {
   vec2 dx = vec2(uTexel.x, 0.0);
@@ -238,46 +243,55 @@ void main() {
   surface1 += texture(uSurface, vUv - dy) * max(forceD.y, 0.0);
   surface1 += texture(uSurface, vUv + dy) * max(-forceU.y, 0.0);
 
-  // --- 2. Brush deposit ------------------------------------------------------
-  if (uBrushActive && uBrushCharge > 0.001) {
-    float d = toolcraftDistToSegment(vUv, uBrushPrevPos, uBrushPos);
-
-    if (uBrushShape == 2) {
-      vec2 rel = vUv - uBrushPos;
-      d = min(d, max(abs(rel.x) * uResolution.x, abs(rel.y) * uResolution.y) / uResolution.x);
-    }
-
+  // --- 2. Brush deposit (distance-based dabs) --------------------------------
+  // Each dab is deposited exactly once (in the one frame it is placed), so the
+  // total pigment along a stroke depends on path length and dab spacing, not on
+  // frame rate. Overlapping dabs accumulate additively: tight spacing overlaps
+  // into a smooth continuous wash, wide spacing leaves separated dry-brush dots.
+  if (uBrushCharge > 0.001 && uDabCount > 0) {
     float shapeRadius = uBrushShape == 1 ? uBrushRadius * 0.82 : uBrushRadius;
     // Low-frequency bristle variation: hog breaks the stroke subtly without the
     // per-pixel high-frequency noise that made edges look grainy.
     float hairJitter =
       (toolcraftNoise(vUv * uResolution * 0.16) - 0.5) * uBrushHairNoise * shapeRadius;
-    float mask = 1.0 - smoothstep(shapeRadius * 0.45, shapeRadius + hairJitter, d);
-    mask = clamp(mask, 0.0, 1.0) * uBrushCharge;
 
-    if (mask > 0.0) {
-      // Deposit rates are per-second (scaled by uDt) so stroke density is
-      // frame-rate independent and consecutive per-frame stamp overlaps do not
-      // bead into darker dots along the stroke.
+    float acc = 0.0;
+    for (int i = 0; i < MAX_DABS; i += 1) {
+      if (i >= uDabCount) {
+        break;
+      }
+      vec2 c = uDabCenters[i];
+      float d;
+      if (uBrushShape == 2) {
+        vec2 rel = vUv - c;
+        d = max(abs(rel.x) * uResolution.x, abs(rel.y) * uResolution.y) / uResolution.x;
+      } else {
+        d = length(vUv - c);
+      }
+      acc += clamp(1.0 - smoothstep(shapeRadius * 0.45, shapeRadius + hairJitter, d), 0.0, 1.0);
+    }
+    acc *= uBrushCharge;
+
+    if (acc > 0.0) {
       if (uDepositIsWater) {
         // Clear water: wets the paper and re-dissolves a little settled
         // pigment back into the mobile surface layer (re-wetting dry paint).
-        surface1.a = min(surface1.a + mask * 26.0 * uDt, 2.5);
-        vec3 lifted = infused0.rgb * min(mask * 2.6 * uDt, 0.5);
+        surface1.a = min(surface1.a + acc * 0.85, 2.5);
+        vec3 lifted = infused0.rgb * min(acc * 0.10, 0.5);
         infused0.rgb -= lifted;
         surface1.rgb += lifted;
       } else if (uDepositIsWhite) {
         // Body-colour white: lifts/covers pigment rather than adding to it
         // (subtractive white would be a no-op).
-        float strength = clamp(mask * mix(6.0, 34.0, uPigmentOpacity) * uDt, 0.0, 0.9);
+        float strength = clamp(acc * mix(0.22, 0.9, uPigmentOpacity), 0.0, 0.9);
         surface1.rgb *= (1.0 - strength);
         infused0.rgb *= (1.0 - strength * 0.5);
       } else {
         // Additive pigment concentration — repeated strokes keep building
         // density instead of chasing a per-pigment asymptote.
-        float concentration = mix(2.0, 14.0, uPigmentOpacity);
-        surface1.rgb += uDepositCmy * (mask * concentration * uDt);
-        surface1.a = min(surface1.a + mask * 18.0 * uDt, 2.5);
+        float concentration = mix(0.16, 0.6, uPigmentOpacity);
+        surface1.rgb += uDepositCmy * (acc * concentration);
+        surface1.a = min(surface1.a + acc * 0.6, 2.5);
       }
     }
   }
@@ -327,14 +341,27 @@ void main() {
   );
 
   // --- 4. Absorption surface -> infused (paper eqs [9]-[10]) -----------------
-  float capacity = mix(1.35, 0.6, height);
-  float absorbed = min(0.10 * timeScale, 0.55) * absorbency * surface1.a;
+  // Two independent, user-controlled rates. Water absorption (uWaterAbsorption)
+  // soaks the surface puddle into the fibers; paint absorption (uPaintAbsorption)
+  // fixes mobile pigment into the fibers. Pigment settling is gated by dryness
+  // so that WHILE the paper is wet the pigment stays on the mobile surface layer
+  // and keeps flowing and bleeding (wet-on-wet blooms into a wet area), and only
+  // sets as the water leaves (so wet-on-dry stays crisp). Capacity is generous
+  // so already-damp paper under a wash still has headroom to keep absorbing.
+  float capacity = mix(2.8, 1.5, height);
+  float waterRate = mix(0.012, 0.14, uWaterAbsorption);
+  float absorbed = min(waterRate * timeScale, 0.3) * absorbency * surface1.a;
   absorbed = min(absorbed, max(0.0, capacity - infused1.a));
 
-  float absorbFrac = surface1.a > 1e-5 ? absorbed / surface1.a : 0.0;
-  // Granulation: pigment preferentially settles into cavities as it is
-  // absorbed — dried-wash texture instead of grainy wet edges.
-  float settleFrac = min(absorbFrac * mix(1.0, clamp(1.7 - 1.4 * height, 0.4, 1.7), uGranulation), 1.0);
+  float dryness = 1.0 - clamp(surface1.a, 0.0, 1.0);
+  float paintRate = mix(0.02, 0.5, uPaintAbsorption);
+  // Granulation: pigment preferentially settles into cavities as it sets —
+  // dried-wash texture instead of grainy wet edges.
+  float settleFrac = min(
+    paintRate * (0.1 + 0.9 * dryness) * timeScale *
+      mix(1.0, clamp(1.7 - 1.4 * height, 0.4, 1.7), uGranulation),
+    1.0
+  );
 
   vec3 settled = surface1.rgb * settleFrac;
   infused1.a += absorbed;
@@ -350,9 +377,12 @@ void main() {
   }
 
   // --- 5. Evaporation --------------------------------------------------------
-  float evaporation = uDt * mix(0.02, 1.1, uDryingSpeed);
-  surface1.a = max(surface1.a - evaporation * 0.9, 0.0);
-  infused1.a = max(infused1.a - evaporation * 0.45, 0.0);
+  // Gentle by default so a wash stays wet for several seconds (long enough to
+  // paint wet-on-wet and have pigment bleed through the damp fibers); Drying
+  // speed scales it up toward a fast dry.
+  float evaporation = uDt * mix(0.006, 0.6, uDryingSpeed);
+  surface1.a = max(surface1.a - evaporation * 0.8, 0.0);
+  infused1.a = max(infused1.a - evaporation * 0.18, 0.0);
 
   outSurface = clamp(surface1, vec4(0.0), vec4(vec3(4.0), 2.5));
   outInfused = clamp(infused1, vec4(0.0), vec4(vec3(4.0), 2.0));
@@ -585,9 +615,14 @@ export class WatercolorEngine {
 
   private brushPos: [number, number] = [0, 0];
 
-  private brushPrevPos: [number, number] = [0, 0];
-
   private brushCharge = 1;
+
+  // Distance-based dab queue: pending dab centres (flat [x0,y0,x1,y1,...] in UV)
+  // to deposit next frame, and the UV position of the last placed dab so arc
+  // length carries across pointer events and frames.
+  private pendingDabs: number[] = [];
+
+  private lastDabUv: [number, number] | null = null;
 
   private hasContent = false;
 
@@ -774,7 +809,6 @@ export class WatercolorEngine {
 
   beginStroke(uvX: number, uvY: number): void {
     this.brushPos = [uvX, uvY];
-    this.brushPrevPos = [uvX, uvY];
     this.brushActive = true;
     this.hasContent = true;
     this.lastStrokeTime = performance.now();
@@ -783,21 +817,76 @@ export class WatercolorEngine {
     // fully loaded — otherwise consecutive same-pigment strokes deposit nothing
     // once the first one has drained the charge.
     this.brushCharge = 1;
+    // Lay the first dab of the stroke; subsequent dabs are spaced by distance.
+    this.pendingDabs = [];
+    this.lastDabUv = [uvX, uvY];
+    this.pushDab(uvX, uvY);
   }
 
   moveStroke(uvX: number, uvY: number): void {
     this.brushPos = [uvX, uvY];
     this.brushActive = true;
     this.lastStrokeTime = performance.now();
+
+    if (this.lastDabUv === null) {
+      this.lastDabUv = [uvX, uvY];
+      this.pushDab(uvX, uvY);
+      return;
+    }
+
+    const spacing = Math.max(0.0015, this.dabSpacingUv());
+    let [lx, ly] = this.lastDabUv;
+    let dist = Math.hypot(uvX - lx, uvY - ly);
+
+    if (dist < 1e-6) {
+      return;
+    }
+
+    const ux = (uvX - lx) / dist;
+    const uy = (uvY - ly) / dist;
+    let placed = 0;
+
+    // Walk toward the new pointer position, stamping a dab every `spacing` of
+    // arc length; the leftover (< spacing) is carried in lastDabUv so the next
+    // move/frame continues the same even cadence.
+    while (dist >= spacing && placed < MAX_DABS) {
+      lx += ux * spacing;
+      ly += uy * spacing;
+      this.pushDab(lx, ly);
+      dist -= spacing;
+      placed += 1;
+    }
+
+    this.lastDabUv = [lx, ly];
   }
 
   endStroke(): void {
     this.brushActive = false;
+    this.lastDabUv = null;
+  }
+
+  private pushDab(x: number, y: number): void {
+    if (this.pendingDabs.length / 2 < MAX_DABS) {
+      this.pendingDabs.push(x, y);
+    }
+  }
+
+  /** UV-space brush stamp radius, matching uBrushRadius in the deposit shader. */
+  private brushRadiusUv(): number {
+    return Math.max(0.002, (this.params.brushSize / 10) * 0.05 + 0.006);
+  }
+
+  /** UV-space arc-length spacing between brush dabs, driven by Stroke spacing. */
+  private dabSpacingUv(): number {
+    // strokeSpacing 0 → tight overlap (smooth wash); 1 → ~2 radii apart (dotty).
+    return this.brushRadiusUv() * (0.25 + 1.75 * this.params.strokeSpacing);
   }
 
   clear(): void {
     const gl = this.gl;
     this.hasContent = false;
+    this.pendingDabs = [];
+    this.lastDabUv = null;
 
     for (const target of this.targets) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
@@ -870,16 +959,18 @@ export class WatercolorEngine {
     gl.uniform1f(gl.getUniformLocation(program, "uGranulation"), this.params.granulation);
     gl.uniform1f(gl.getUniformLocation(program, "uPigmentOpacity"), this.params.pigmentOpacity);
     gl.uniform1f(gl.getUniformLocation(program, "uDryingSpeed"), this.params.dryingSpeed);
+    gl.uniform1f(gl.getUniformLocation(program, "uWaterAbsorption"), this.params.waterAbsorption);
+    gl.uniform1f(gl.getUniformLocation(program, "uPaintAbsorption"), this.params.paintAbsorption);
 
-    gl.uniform1i(gl.getUniformLocation(program, "uBrushActive"), this.brushActive ? 1 : 0);
-    gl.uniform2f(gl.getUniformLocation(program, "uBrushPos"), this.brushPos[0], this.brushPos[1]);
-    gl.uniform2f(
-      gl.getUniformLocation(program, "uBrushPrevPos"),
-      this.brushPrevPos[0],
-      this.brushPrevPos[1],
-    );
-    const brushRadiusUv = Math.max(0.002, (this.params.brushSize / 10) * 0.05 + 0.006);
-    gl.uniform1f(gl.getUniformLocation(program, "uBrushRadius"), brushRadiusUv);
+    const dabCount = Math.min(MAX_DABS, Math.floor(this.pendingDabs.length / 2));
+    gl.uniform1i(gl.getUniformLocation(program, "uDabCount"), dabCount);
+    if (dabCount > 0) {
+      gl.uniform2fv(
+        gl.getUniformLocation(program, "uDabCenters"),
+        new Float32Array(this.pendingDabs.slice(0, dabCount * 2)),
+      );
+    }
+    gl.uniform1f(gl.getUniformLocation(program, "uBrushRadius"), this.brushRadiusUv());
     gl.uniform1i(gl.getUniformLocation(program, "uBrushShape"), brushShapeCode[this.params.brushShape]);
     gl.uniform1f(
       gl.getUniformLocation(program, "uBrushHairNoise"),
@@ -902,7 +993,9 @@ export class WatercolorEngine {
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-    this.brushPrevPos = this.brushPos;
+    // Each dab is deposited once; consume this frame's queue so idle frames (no
+    // new pointer motion) deposit nothing rather than re-stamping in place.
+    this.pendingDabs = [];
     this.readIndex = this.readIndex === 0 ? 1 : 0;
   }
 

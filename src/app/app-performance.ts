@@ -4,7 +4,6 @@ import {
 } from "@/toolcraft/runtime";
 
 const watercolorCanvasSelector = '[data-toolcraft-watercolor-canvas="true"]';
-const mixingAreaSelector = '[data-toolcraft-mixing-area="true"] canvas';
 
 const largeCanvasWorkloadFixture = {
   kind: "large-canvas" as const,
@@ -101,9 +100,13 @@ export const appPerformance: ToolcraftPerformanceConfig = defineToolcraftPerform
         targets: [
           "canvas.renderScale",
           "brush.size",
+          "brush.strokeSpacing",
+          "brush.fade",
           "paper.roughness",
           "paper.reliefHeight",
           "paper.dryingSpeed",
+          "paper.waterAbsorption",
+          "paper.paintAbsorption",
           "dynamics.wetnessSpread",
           "dynamics.granulation",
           "dynamics.edgeDarkening",
@@ -121,8 +124,6 @@ export const appPerformance: ToolcraftPerformanceConfig = defineToolcraftPerform
           "brush.type",
           "brush.hairType",
           "paint.currentPigmentColor",
-          "paint.mixingArea",
-          "paint.mixingArea.reset",
           "paper.texturePreset",
           "canvas.paintLayer",
           "export.image.resolution",
@@ -357,6 +358,22 @@ export const appPerformance: ToolcraftPerformanceConfig = defineToolcraftPerform
       workloadFixture: largeCanvasWorkloadFixture,
     },
     controlDragScenario({
+      automatedTestName: "perf: brush-stroke-spacing-control-drag scenario is well-formed",
+      browserTestName: "browser perf: stroke spacing drag stays responsive",
+      controlLabel: "Stroke spacing",
+      fixtureNote: "Stroke spacing slider dragged from its minimum to its maximum value.",
+      id: "brush-stroke-spacing-control-drag",
+      target: "brush.strokeSpacing",
+    }),
+    controlDragScenario({
+      automatedTestName: "perf: brush-fade-control-drag scenario is well-formed",
+      browserTestName: "browser perf: dry-brush fade drag stays responsive",
+      controlLabel: "Dry-brush fade",
+      fixtureNote: "Dry-brush fade slider dragged from its minimum to its maximum value.",
+      id: "brush-fade-control-drag",
+      target: "brush.fade",
+    }),
+    controlDragScenario({
       automatedTestName: "perf: paper-roughness-control-drag scenario is well-formed",
       browserTestName: "browser perf: roughness drag stays responsive",
       controlLabel: "Roughness",
@@ -379,6 +396,22 @@ export const appPerformance: ToolcraftPerformanceConfig = defineToolcraftPerform
       fixtureNote: "Drying speed slider dragged from its minimum to its maximum value.",
       id: "paper-drying-speed-control-drag",
       target: "paper.dryingSpeed",
+    }),
+    controlDragScenario({
+      automatedTestName: "perf: paper-water-absorption-control-drag scenario is well-formed",
+      browserTestName: "browser perf: water absorption drag stays responsive",
+      controlLabel: "Water absorption",
+      fixtureNote: "Water absorption slider dragged from its minimum to its maximum value.",
+      id: "paper-water-absorption-control-drag",
+      target: "paper.waterAbsorption",
+    }),
+    controlDragScenario({
+      automatedTestName: "perf: paper-paint-absorption-control-drag scenario is well-formed",
+      browserTestName: "browser perf: paint absorption drag stays responsive",
+      controlLabel: "Paint absorption",
+      fixtureNote: "Paint absorption slider dragged from its minimum to its maximum value.",
+      id: "paper-paint-absorption-control-drag",
+      target: "paper.paintAbsorption",
     }),
     controlDragScenario({
       automatedTestName: "perf: wetness-spread-control-drag scenario is well-formed",
@@ -455,26 +488,6 @@ export const appPerformance: ToolcraftPerformanceConfig = defineToolcraftPerform
       fixtureNote: "Click the Paper section Rough preset action.",
       id: "paper-preset-control-change",
       target: "paper.texturePreset",
-    }),
-    controlChangeScenario({
-      automatedTestName: "perf: mixing-area-control-change scenario is well-formed",
-      browserTestName: "browser perf: mixing palette interactions stay responsive",
-      expectedObservable:
-        "Dragging in the mixing palette deposits pigment dabs and clicking samples a colour without blocking the UI thread.",
-      fixtureNote: "Drag across the mixing palette, then click once to sample a colour.",
-      id: "mixing-area-control-change",
-      target: "paint.mixingArea",
-      uiSelector: mixingAreaSelector,
-    }),
-    controlChangeScenario({
-      automatedTestName: "perf: mixing-reset-control-change scenario is well-formed",
-      browserTestName: "browser perf: mixing palette reset action stays responsive",
-      expectedObservable:
-        "Clicking the Mixing section Reset action clears the palette back to empty without blocking the UI thread.",
-      fixtureNote: "Drag a pigment dab onto the mixing palette, then click the Mixing section Reset action.",
-      id: "mixing-reset-control-change",
-      target: "paint.mixingArea.reset",
-      uiSelector: mixingAreaSelector,
     }),
     controlChangeScenario({
       automatedTestName: "perf: export-include-background-control-change scenario is well-formed",

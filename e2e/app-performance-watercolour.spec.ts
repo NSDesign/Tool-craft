@@ -195,6 +195,26 @@ test("browser perf: canvas height change stays responsive at max size", async ({
   expectToolcraftScenarioPerformanceBudget(result, appPerformance, "canvas-height-control-change");
 });
 
+test("browser perf: stroke spacing drag stays responsive", async ({ page }) => {
+  const result = await measureToolcraftInteraction(page, async () => {
+    await dragToolcraftSliderByLabel(page, "Stroke spacing", 0.9);
+    await paintStroke(page);
+  });
+
+  await expect(page.locator('[data-toolcraft-watercolor-canvas="true"]')).toBeVisible();
+  expectToolcraftScenarioPerformanceBudget(result, appPerformance, "brush-stroke-spacing-control-drag");
+});
+
+test("browser perf: dry-brush fade drag stays responsive", async ({ page }) => {
+  const result = await measureToolcraftInteraction(page, async () => {
+    await dragToolcraftSliderByLabel(page, "Dry-brush fade", 0.9);
+    await paintStroke(page);
+  });
+
+  await expect(page.locator('[data-toolcraft-watercolor-canvas="true"]')).toBeVisible();
+  expectToolcraftScenarioPerformanceBudget(result, appPerformance, "brush-fade-control-drag");
+});
+
 test("browser perf: roughness drag stays responsive", async ({ page }) => {
   const result = await measureToolcraftInteraction(page, async () => {
     await dragToolcraftSliderByLabel(page, "Roughness", 0.9);
@@ -223,6 +243,26 @@ test("browser perf: drying speed drag stays responsive", async ({ page }) => {
 
   await expect(page.locator('[data-toolcraft-watercolor-canvas="true"]')).toBeVisible();
   expectToolcraftScenarioPerformanceBudget(result, appPerformance, "paper-drying-speed-control-drag");
+});
+
+test("browser perf: water absorption drag stays responsive", async ({ page }) => {
+  const result = await measureToolcraftInteraction(page, async () => {
+    await dragToolcraftSliderByLabel(page, "Water absorption", 0.9);
+    await paintStroke(page);
+  });
+
+  await expect(page.locator('[data-toolcraft-watercolor-canvas="true"]')).toBeVisible();
+  expectToolcraftScenarioPerformanceBudget(result, appPerformance, "paper-water-absorption-control-drag");
+});
+
+test("browser perf: paint absorption drag stays responsive", async ({ page }) => {
+  const result = await measureToolcraftInteraction(page, async () => {
+    await dragToolcraftSliderByLabel(page, "Paint absorption", 0.9);
+    await paintStroke(page);
+  });
+
+  await expect(page.locator('[data-toolcraft-watercolor-canvas="true"]')).toBeVisible();
+  expectToolcraftScenarioPerformanceBudget(result, appPerformance, "paper-paint-absorption-control-drag");
 });
 
 test("browser perf: wetness spread drag stays responsive", async ({ page }) => {
@@ -316,52 +356,6 @@ test("browser perf: paper texture preset stays responsive", async ({ page }) => 
   await expect(page.getByRole("button", { name: "Hot press", exact: true })).toBeVisible();
   await expect(page.locator('[data-toolcraft-watercolor-canvas="true"]')).toBeVisible();
   expectToolcraftScenarioPerformanceBudget(result, appPerformance, "paper-preset-control-change");
-});
-
-test("browser perf: mixing palette interactions stay responsive", async ({ page }) => {
-  const mixingCanvas = page.locator('[data-toolcraft-mixing-area="true"] canvas');
-  await mixingCanvas.scrollIntoViewIfNeeded();
-  const box = await mixingCanvas.boundingBox();
-  if (!box) {
-    throw new Error("Mixing area canvas not found.");
-  }
-
-  const result = await measureToolcraftInteraction(page, async () => {
-    await page.getByRole("button", { name: "Blue" }).click();
-
-    await page.mouse.move(box.x + 20, box.y + 20);
-    await page.mouse.down();
-    await page.mouse.move(box.x + 60, box.y + 60, { steps: 6 });
-    await page.mouse.up();
-
-    await page.mouse.move(box.x + 40, box.y + 40);
-    await page.mouse.down();
-    await page.mouse.up();
-  });
-
-  await expect(mixingCanvas).toBeVisible();
-  expectToolcraftScenarioPerformanceBudget(result, appPerformance, "mixing-area-control-change");
-});
-
-test("browser perf: mixing palette reset action stays responsive", async ({ page }) => {
-  const mixingCanvas = page.locator('[data-toolcraft-mixing-area="true"] canvas');
-  await mixingCanvas.scrollIntoViewIfNeeded();
-  const box = await mixingCanvas.boundingBox();
-  if (!box) {
-    throw new Error("Mixing area canvas not found.");
-  }
-
-  await page.mouse.move(box.x + 20, box.y + 20);
-  await page.mouse.down();
-  await page.mouse.move(box.x + 60, box.y + 60, { steps: 6 });
-  await page.mouse.up();
-
-  const result = await measureToolcraftInteraction(page, async () => {
-    await page.getByRole("button", { name: "Reset", exact: true }).click();
-  });
-
-  await expect(mixingCanvas).toBeVisible();
-  expectToolcraftScenarioPerformanceBudget(result, appPerformance, "mixing-reset-control-change");
 });
 
 test("browser perf: include background toggle stays responsive", async ({ page }) => {

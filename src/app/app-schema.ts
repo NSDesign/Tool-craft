@@ -88,38 +88,47 @@ export const appSchema = defineToolcraft({
               target: "brush.size",
               type: "slider",
             },
+            strokeSpacing: {
+              defaultValue: 18,
+              description:
+                "How far apart the brush stamps paint along a stroke. Low values overlap into a smooth continuous wash; high values leave separated, dry-brush-style dabs.",
+              label: "Stroke spacing",
+              max: 100,
+              min: 0,
+              orderRole: "detail",
+              performanceReason:
+                "Stroke spacing only changes how far apart brush dabs are placed along the stroke path in the existing deposit pass; it does not add render passes or change texture resolution.",
+              performanceRole: "responsiveness",
+              step: 1,
+              target: "brush.strokeSpacing",
+              type: "slider",
+              unit: "%",
+            },
+            fade: {
+              defaultValue: 20,
+              description:
+                "How quickly a single continuous stroke runs dry as the brush depletes its charge. 0 keeps the stroke at full strength end to end (no fade); higher values fade the stroke out sooner into a dry-brush tail.",
+              label: "Dry-brush fade",
+              max: 100,
+              min: 0,
+              orderRole: "detail",
+              performanceReason:
+                "Dry-brush fade only scales how fast the brush charge depletes with stroke distance in the pointer handler; it does not add render passes or change texture resolution.",
+              performanceRole: "responsiveness",
+              step: 1,
+              target: "brush.fade",
+              type: "slider",
+              unit: "%",
+            },
           },
           title: "Brush",
         },
         {
           controls: {
-            mixingArea: {
-              defaultValue: { pixels: null },
-              label: "Mixing palette",
-              orderRole: "primary",
-              performanceReason:
-                "The mixing palette is a small fixed-size canvas independent of the main canvas resolution.",
-              performanceRole: "responsiveness",
-              target: "paint.mixingArea",
-              type: "mixingArea",
-            },
-            reset: {
-              actions: [{ icon: "eraser", label: "Reset", value: "mixing-reset" }],
-              label: "Palette",
-              orderRole: "action",
-              performanceReason:
-                "Clearing the mixing palette is a one-shot small fixed-size canvas clear.",
-              performanceRole: "responsiveness",
-              target: "paint.mixingArea.reset",
-              type: "actions",
-            },
-          },
-          title: "Mixing",
-        },
-        {
-          controls: {
             dryingSpeed: {
               defaultValue: 40,
+              description:
+                "How fast wet paint dries out (evaporates). Low values keep the paper wet for longer so washes stay workable; high values dry strokes quickly.",
               label: "Drying speed",
               max: 100,
               min: 0,
@@ -129,6 +138,38 @@ export const appSchema = defineToolcraft({
               performanceRole: "responsiveness",
               step: 1,
               target: "paper.dryingSpeed",
+              type: "slider",
+              unit: "%",
+            },
+            waterAbsorption: {
+              defaultValue: 35,
+              description:
+                "How fast the paper soaks up surface water. Low absorption keeps water pooled on top so it spreads and stays workable; high absorption pulls it into the fibers quickly.",
+              label: "Water absorption",
+              max: 100,
+              min: 0,
+              orderRole: "detail",
+              performanceReason:
+                "Water absorption only scales the per-frame surface-to-infused water transfer already computed in the simulation pass; it does not add render passes or change texture resolution.",
+              performanceRole: "responsiveness",
+              step: 1,
+              target: "paper.waterAbsorption",
+              type: "slider",
+              unit: "%",
+            },
+            paintAbsorption: {
+              defaultValue: 35,
+              description:
+                "How fast pigment fixes into the paper. Low absorption keeps pigment mobile so it bleeds and flows into wet areas; high absorption sets each stroke quickly for crisper marks.",
+              label: "Paint absorption",
+              max: 100,
+              min: 0,
+              orderRole: "detail",
+              performanceReason:
+                "Paint absorption only scales the per-frame pigment settling already computed in the simulation pass; it does not add render passes or change texture resolution.",
+              performanceRole: "responsiveness",
+              step: 1,
+              target: "paper.paintAbsorption",
               type: "slider",
               unit: "%",
             },

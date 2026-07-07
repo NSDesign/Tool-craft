@@ -376,24 +376,18 @@ export const starterControlSectionInventory: readonly ToolcraftControlSectionInv
   {
     entity: "brush",
     groupingReason:
-      "Hair type, brush type, and size are the three parameters of one product entity, the brush, that shape every stroke deposit stamp.",
-    targets: ["brush.hairType", "brush.type", "brush.size"],
+      "Hair type, brush type, size, stroke spacing, and dry-brush fade are the parameters of one product entity, the brush, that shape every stroke deposit stamp, how those stamps are spaced along the stroke path, and how the loaded brush runs dry over a stroke.",
+    targets: ["brush.hairType", "brush.type", "brush.size", "brush.strokeSpacing", "brush.fade"],
     title: "Brush",
-  },
-  {
-    entity: "mixing palette",
-    groupingReason:
-      "The interactive mixing palette canvas and its Reset action both operate on the same mixing-palette runtime state and belong together as one workflow stage.",
-    targets: ["paint.mixingArea", "paint.mixingArea.reset"],
-    title: "Mixing",
-    workflowStage: "custom-mix",
   },
   {
     entity: "paper",
     groupingReason:
-      "Drying speed, relief height, roughness, and the Hot press/Cold press/Rough texture presets are the paper's own texture parameters (presets one-shot-write the two sliders), and Clear wipes the same paint layer painted onto that paper, so they all stay in one Paper section.",
+      "Drying speed, water absorption, paint absorption, relief height, roughness, and the Hot press/Cold press/Rough texture presets are the paper's own physical parameters (how fast it dries, how it soaks up water and pigment, and its texture; presets one-shot-write the two texture sliders), and Clear wipes the same paint layer painted onto that paper, so they all stay in one Paper section.",
     targets: [
       "paper.dryingSpeed",
+      "paper.waterAbsorption",
+      "paper.paintAbsorption",
       "paper.reliefHeight",
       "paper.roughness",
       "paper.texturePreset",
@@ -522,6 +516,36 @@ export const appAcceptance: readonly ToolcraftComponentAcceptance[] = [
   },
   {
     automated: true,
+    automatedTestName: "acceptance: stroke spacing changes stroke from smooth to dotty",
+    browser: true,
+    browserTestName: "acceptance: stroke spacing changes stroke from smooth to dotty",
+    componentType: "slider",
+    evidence: "rendered-pixels",
+    expectedObservable:
+      "Dragging Stroke spacing to its maximum and drawing a stroke lays down separated, evenly spaced dry-brush dabs instead of the smooth continuous band the same stroke produces at the low default spacing.",
+    fixture: "Fresh watercolour canvas with default Stroke spacing (smooth continuous strokes).",
+    id: "brush.strokeSpacing",
+    kind: "control",
+    target: "brush.strokeSpacing",
+    userAction: "Drag the Stroke spacing slider to its maximum and draw a stroke.",
+  },
+  {
+    automated: true,
+    automatedTestName: "acceptance: dry-brush fade controls how fast a stroke runs dry",
+    browser: true,
+    browserTestName: "acceptance: dry-brush fade controls how fast a stroke runs dry",
+    componentType: "slider",
+    evidence: "rendered-pixels",
+    expectedObservable:
+      "With Dry-brush fade at its maximum, a single long continuous stroke lands at full strength at its start but fades to a lighter, broken dry-brush tail by its end; at fade 0 the same stroke stays at even strength from end to end.",
+    fixture: "Fresh watercolour canvas with a single long horizontal stroke.",
+    id: "brush.fade",
+    kind: "control",
+    target: "brush.fade",
+    userAction: "Drag Dry-brush fade to its maximum and draw one long continuous stroke across the canvas.",
+  },
+  {
+    automated: true,
     automatedTestName: "acceptance: paper texture preset updates the roughness and relief sliders",
     browser: true,
     browserTestName: "acceptance: paper texture preset updates the roughness and relief sliders",
@@ -542,46 +566,6 @@ export const appAcceptance: readonly ToolcraftComponentAcceptance[] = [
   },
   {
     automated: true,
-    automatedTestName: "acceptance: mixing palette drag deposits pigment and sample click updates the active pigment",
-    browser: true,
-    browserTestName: "acceptance: mixing palette drag deposits pigment and sample click updates the active pigment",
-    builtInFitCheck: {
-      checkedBuiltIns: ["palette", "color", "collectionActions", "actions"],
-      closestBuiltIn: "palette",
-      productObservable:
-        "Dragging on the 128x128 mixing canvas blends soft pigment dabs of the currently selected pigment directly into the palette pixels; a plain click (no drag) samples the pixel color under the pointer and cross-writes paint.currentPigmentColor directly via controls.setValue, bypassing this control's own bound target.",
-      whyInsufficient:
-        "Palette only offers a fixed family/shade grid, not a freeform paintable canvas that blends dragged dabs and samples arbitrary pixel colors. Color offers a single color-wheel value, not an interactive mixing surface. No built-in control both draws into a persisted pixel buffer and cross-writes a sibling control's target from a pointer sample.",
-    },
-    componentType: "mixingArea",
-    customControlCoverage: "all-custom-control-behavior",
-    evidence: "rendered-pixels",
-    fixture: "Blue pigment selected, mixing palette canvas empty.",
-    id: "paint.mixingArea",
-    kind: "control",
-    target: "paint.mixingArea",
-    userAction:
-      "Drag across the mixing palette canvas to deposit and blend a Blue pigment dab, then click once (no drag) on a different area to sample its color and confirm the active pigment swatch reference updates.",
-    expectedObservable:
-      "Dragging across the mixing palette visibly deposits and blends a soft pigment dab at the pointer path; a subsequent plain click (no drag) samples the pixel color under the pointer and updates paint.currentPigmentColor, which is then reflected the next time a stroke is drawn on the main canvas.",
-  },
-  {
-    automated: true,
-    automatedTestName: "acceptance: mixing palette reset clears the palette back to empty",
-    browser: true,
-    browserTestName: "acceptance: mixing palette reset clears the palette back to empty",
-    componentType: "actions",
-    evidence: "command-side-effect",
-    expectedObservable:
-      "After dragging pigment dabs onto the mixing palette, clicking Reset clears the palette canvas back to its empty starting state ({pixels: null}).",
-    fixture: "Mixing palette with at least one dragged pigment dab present.",
-    id: "paint.mixingArea.reset",
-    kind: "control",
-    target: "paint.mixingArea.reset",
-    userAction: "Drag a pigment dab onto the mixing palette, then click Reset.",
-  },
-  {
-    automated: true,
     automatedTestName: "acceptance: drying speed changes how quickly wet edges dry on the canvas",
     browser: true,
     browserTestName: "acceptance: drying speed changes how quickly wet edges dry on the canvas",
@@ -594,6 +578,36 @@ export const appAcceptance: readonly ToolcraftComponentAcceptance[] = [
     kind: "control",
     target: "paper.dryingSpeed",
     userAction: "Set Drying speed to maximum, paint a stroke, and wait briefly while sampling canvas pixels.",
+  },
+  {
+    automated: true,
+    automatedTestName: "acceptance: water absorption changes how long the paper stays wet",
+    browser: true,
+    browserTestName: "acceptance: water absorption changes how long the paper stays wet",
+    componentType: "slider",
+    evidence: "rendered-pixels",
+    expectedObservable:
+      "Setting Water absorption to its minimum keeps a water/paint area visibly wet and spreading for longer, so a pigment stroke laid across that area bleeds further, than the same sequence at maximum water absorption where the surface soaks in quickly.",
+    fixture: "Fresh watercolour canvas; a water area is painted, then a pigment stroke is drawn across it.",
+    id: "paper.waterAbsorption",
+    kind: "control",
+    target: "paper.waterAbsorption",
+    userAction: "Set Water absorption to its minimum, paint a water area, then paint a pigment stroke across it and watch it bleed.",
+  },
+  {
+    automated: true,
+    automatedTestName: "acceptance: paint absorption changes how much a stroke bleeds versus sets crisp",
+    browser: true,
+    browserTestName: "acceptance: paint absorption changes how much a stroke bleeds versus sets crisp",
+    componentType: "slider",
+    evidence: "rendered-pixels",
+    expectedObservable:
+      "Setting Paint absorption to its minimum keeps pigment mobile so a stroke painted into a wet area blooms and feathers outward; at maximum the same stroke fixes quickly and stays a crisper, more contained mark.",
+    fixture: "Fresh watercolour canvas with a wet area, then a pigment stroke painted into it.",
+    id: "paper.paintAbsorption",
+    kind: "control",
+    target: "paper.paintAbsorption",
+    userAction: "Set Paint absorption to its minimum, paint a wet area, then paint a pigment stroke into it and watch it bloom.",
   },
   {
     automated: true,

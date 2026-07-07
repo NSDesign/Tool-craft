@@ -58,6 +58,20 @@ describe("watercolour app acceptance scenarios are well-formed", () => {
     expect(getSchemaControlByTarget("brush.size")?.type).toBe("slider");
   });
 
+  test("acceptance: stroke spacing changes stroke from smooth to dotty", () => {
+    const entry = getAcceptance("brush.strokeSpacing");
+    expect(entry.target).toBe("brush.strokeSpacing");
+    expect(entry.componentType).toBe("slider");
+    expect(getSchemaControlByTarget("brush.strokeSpacing")?.type).toBe("slider");
+  });
+
+  test("acceptance: dry-brush fade controls how fast a stroke runs dry", () => {
+    const entry = getAcceptance("brush.fade");
+    expect(entry.target).toBe("brush.fade");
+    expect(entry.componentType).toBe("slider");
+    expect(getSchemaControlByTarget("brush.fade")?.type).toBe("slider");
+  });
+
   test("acceptance: paper texture preset updates the roughness and relief sliders", () => {
     const entry = getAcceptance("paper.texturePreset");
     expect(entry.target).toBe("paper.texturePreset");
@@ -72,25 +86,24 @@ describe("watercolour app acceptance scenarios are well-formed", () => {
     expect(getSchemaControlByTarget("dynamics.tilt")?.type).toBe("slider");
   });
 
-  test("acceptance: mixing palette drag deposits pigment and sample click updates the active pigment", () => {
-    const entry = getAcceptance("paint.mixingArea");
-    expect(entry.target).toBe("paint.mixingArea");
-    expect(entry.componentType).toBe("mixingArea");
-    expect(entry.builtInFitCheck?.closestBuiltIn).toBe("palette");
-    expect(getSchemaControlByTarget("paint.mixingArea")?.type).toBe("mixingArea");
-  });
-
-  test("acceptance: mixing palette reset clears the palette back to empty", () => {
-    const entry = getAcceptance("paint.mixingArea.reset");
-    expect(entry.target).toBe("paint.mixingArea.reset");
-    expect(entry.componentType).toBe("actions");
-    expect(getSchemaControlByTarget("paint.mixingArea.reset")?.type).toBe("actions");
-  });
-
   test("acceptance: drying speed changes how quickly wet edges dry on the canvas", () => {
     const entry = getAcceptance("paper.dryingSpeed");
     expect(entry.target).toBe("paper.dryingSpeed");
     expect(entry.componentType).toBe("slider");
+  });
+
+  test("acceptance: water absorption changes how long the paper stays wet", () => {
+    const entry = getAcceptance("paper.waterAbsorption");
+    expect(entry.target).toBe("paper.waterAbsorption");
+    expect(entry.componentType).toBe("slider");
+    expect(getSchemaControlByTarget("paper.waterAbsorption")?.type).toBe("slider");
+  });
+
+  test("acceptance: paint absorption changes how much a stroke bleeds versus sets crisp", () => {
+    const entry = getAcceptance("paper.paintAbsorption");
+    expect(entry.target).toBe("paper.paintAbsorption");
+    expect(entry.componentType).toBe("slider");
+    expect(getSchemaControlByTarget("paper.paintAbsorption")?.type).toBe("slider");
   });
 
   test("acceptance: relief height changes visible paper texture granulation contrast", () => {

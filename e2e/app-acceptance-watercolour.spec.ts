@@ -11,7 +11,6 @@ import {
 import { expectToolcraftProductObservableToChange } from "./product-observable-helpers";
 
 const watercolorCanvasSelector = '[data-toolcraft-watercolor-canvas="true"]';
-const mixingAreaCanvasSelector = '[data-toolcraft-mixing-area="true"] canvas';
 
 async function paintStroke(page: Page): Promise<void> {
   const canvas = page.locator(watercolorCanvasSelector);
@@ -205,6 +204,21 @@ test("acceptance: brush size drag changes deposited stroke width", async ({ page
   );
 });
 
+test("acceptance: stroke spacing changes stroke from smooth to dotty", async ({ page }) => {
+  // At the low default spacing a stroke is a smooth continuous band; pushing
+  // Stroke spacing to its maximum lays down separated dry-brush dabs, so the
+  // same stroke paints a visibly different mark.
+  await dragToolcraftSliderByLabel(page, "Stroke spacing", 0.95);
+
+  await expectToolcraftProductObservableToChange(
+    page,
+    async () => {
+      await paintStroke(page);
+    },
+    { timeoutMs: 60_000 },
+  );
+});
+
 test("acceptance: paper texture preset updates the roughness and relief sliders", async ({
   page,
 }) => {
@@ -245,65 +259,27 @@ test("acceptance: tilt makes wet paint run down the page", async ({ page }) => {
   );
 });
 
-test("acceptance: mixing palette drag deposits pigment and sample click updates the active pigment", async ({
-  page,
-}) => {
-  await page.getByRole("radio", { name: "Blue" }).click();
+test("acceptance: dry-brush fade controls how fast a stroke runs dry", async ({ page }) => {
+  // At maximum fade the brush charge drains over the stroke, so a single long
+  // stroke lands at full strength then fades to a lighter dry-brush tail — a
+  // visibly different mark from the same stroke drawn at the low default fade.
+  await dragToolcraftSliderByLabel(page, "Dry-brush fade", 0.95);
 
-  const mixingCanvas = page.locator(mixingAreaCanvasSelector);
-  await mixingCanvas.scrollIntoViewIfNeeded();
-  const box = await mixingCanvas.boundingBox();
+  const canvas = page.locator(watercolorCanvasSelector);
+  const box = await canvas.boundingBox();
   if (!box) {
-    throw new Error("Mixing area canvas not found.");
+    throw new Error("Watercolour canvas not found.");
   }
 
   await expectToolcraftProductObservableToChange(
     page,
     async () => {
-      await page.mouse.move(box.x + 20, box.y + 20);
+      await page.mouse.move(box.x + box.width * 0.12, box.y + box.height * 0.5);
       await page.mouse.down();
-      await page.mouse.move(box.x + 70, box.y + 70, { steps: 8 });
+      await page.mouse.move(box.x + box.width * 0.88, box.y + box.height * 0.5, { steps: 30 });
       await page.mouse.up();
     },
-    { selector: mixingAreaCanvasSelector, timeoutMs: 60_000 },
-  );
-
-  // A plain click (no drag) on the deposited dab samples its color and updates the active pigment,
-  // which the next stroke on the main canvas should reflect.
-  await page.mouse.move(box.x + 45, box.y + 45);
-  await page.mouse.down();
-  await page.mouse.up();
-
-  await expectToolcraftProductObservableToChange(
-    page,
-    async () => {
-      await paintStroke(page);
-    },
     { timeoutMs: 60_000 },
-  );
-});
-
-test("acceptance: mixing palette reset clears the palette back to empty", async ({ page }) => {
-  await page.getByRole("radio", { name: "Green" }).click();
-
-  const mixingCanvas = page.locator(mixingAreaCanvasSelector);
-  await mixingCanvas.scrollIntoViewIfNeeded();
-  const box = await mixingCanvas.boundingBox();
-  if (!box) {
-    throw new Error("Mixing area canvas not found.");
-  }
-
-  await page.mouse.move(box.x + 20, box.y + 20);
-  await page.mouse.down();
-  await page.mouse.move(box.x + 70, box.y + 70, { steps: 8 });
-  await page.mouse.up();
-
-  await expectToolcraftProductObservableToChange(
-    page,
-    async () => {
-      await page.getByRole("button", { name: "Reset", exact: true }).click();
-    },
-    { selector: mixingAreaCanvasSelector, timeoutMs: 60_000 },
   );
 });
 
@@ -314,6 +290,38 @@ test("acceptance: drying speed changes how quickly wet edges dry on the canvas",
     page,
     async () => {
       await paintStroke(page);
+    },
+    { timeoutMs: 60_000 },
+  );
+});
+
+test("acceptance: water absorption changes how long the paper stays wet", async ({ page }) => {
+  // Minimum water absorption keeps the paper wet/workable longer, so painting a
+  // stroke visibly changes the canvas as it spreads.
+  await dragToolcraftSliderByLabel(page, "Water absorption", 0.05);
+
+  await expectToolcraftProductObservableToChange(
+    page,
+    async () => {
+      await paintStroke(page);
+      await page.waitForTimeout(1500);
+    },
+    { timeoutMs: 60_000 },
+  );
+});
+
+test("acceptance: paint absorption changes how much a stroke bleeds versus sets crisp", async ({
+  page,
+}) => {
+  // Minimum paint absorption keeps pigment mobile so a stroke keeps spreading
+  // after the pointer is released, changing the canvas over the following moment.
+  await dragToolcraftSliderByLabel(page, "Paint absorption", 0.05);
+
+  await expectToolcraftProductObservableToChange(
+    page,
+    async () => {
+      await paintStroke(page);
+      await page.waitForTimeout(1500);
     },
     { timeoutMs: 60_000 },
   );

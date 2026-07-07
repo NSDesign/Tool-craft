@@ -25,9 +25,11 @@ type CurrentPigmentValue = {
 };
 
 // The brush re-dips to a full charge at the start of each stroke (see the engine's
-// beginStroke). Depletion is gentle so a normal full-width stroke stays loaded; the
-// dry-brush fade only appears on a very long continuous stroke (~1400 CSS px).
-const BRUSH_CHARGE_DEPLETION_PER_CSS_PIXEL = 0.0007;
+// beginStroke). The Dry-brush fade control scales how fast that charge depletes with
+// stroke distance: this constant is the depletion per CSS pixel at the maximum fade
+// (100%), so a full-strength stroke runs dry in ~285 CSS px; the default 20% fades
+// gently over ~1400 px, and 0% never fades.
+const BRUSH_CHARGE_DEPLETION_PER_CSS_PIXEL_AT_MAX_FADE = 0.0035;
 
 function getCurrentPigmentValue(rawValue: unknown): CurrentPigmentValue {
   if (
@@ -72,9 +74,13 @@ export function WatercolorCanvas({ apiRef }: WatercolorCanvasProps): React.JSX.E
   const brushType = (state.values["brush.type"] as BrushShape | undefined) ?? "round";
   const brushSize = (state.values["brush.size"] as number | undefined) ?? 4;
   const brushHairType = (state.values["brush.hairType"] as HairType | undefined) ?? "sable";
+  const strokeSpacing = ((state.values["brush.strokeSpacing"] as number | undefined) ?? 18) / 100;
+  const brushFade = ((state.values["brush.fade"] as number | undefined) ?? 20) / 100;
   const roughness = ((state.values["paper.roughness"] as number | undefined) ?? 50) / 100;
   const reliefHeight = ((state.values["paper.reliefHeight"] as number | undefined) ?? 50) / 100;
   const dryingSpeed = ((state.values["paper.dryingSpeed"] as number | undefined) ?? 40) / 100;
+  const waterAbsorption = ((state.values["paper.waterAbsorption"] as number | undefined) ?? 35) / 100;
+  const paintAbsorption = ((state.values["paper.paintAbsorption"] as number | undefined) ?? 35) / 100;
   const wetnessSpread = ((state.values["dynamics.wetnessSpread"] as number | undefined) ?? 55) / 100;
   const granulation = ((state.values["dynamics.granulation"] as number | undefined) ?? 35) / 100;
   const edgeDarkening = ((state.values["dynamics.edgeDarkening"] as number | undefined) ?? 45) / 100;
@@ -121,11 +127,14 @@ export function WatercolorCanvas({ apiRef }: WatercolorCanvasProps): React.JSX.E
       edgeDarkening,
       granulation,
       includeBackground,
+      paintAbsorption,
       pigmentHex: currentPigment.hex,
       pigmentOpacity,
       reliefHeight,
       roughness,
+      strokeSpacing,
       tilt,
+      waterAbsorption,
       wetnessSpread,
     };
   }
@@ -137,9 +146,12 @@ export function WatercolorCanvas({ apiRef }: WatercolorCanvasProps): React.JSX.E
     brushType,
     brushSize,
     brushHairType,
+    strokeSpacing,
     roughness,
     reliefHeight,
     dryingSpeed,
+    waterAbsorption,
+    paintAbsorption,
     wetnessSpread,
     granulation,
     edgeDarkening,
@@ -207,7 +219,8 @@ export function WatercolorCanvas({ apiRef }: WatercolorCanvasProps): React.JSX.E
       const engine = engineRef.current;
 
       if (engine) {
-        const depleted = engine.getBrushCharge() - distance * BRUSH_CHARGE_DEPLETION_PER_CSS_PIXEL;
+        const depletionPerPixel = brushFade * BRUSH_CHARGE_DEPLETION_PER_CSS_PIXEL_AT_MAX_FADE;
+        const depleted = engine.getBrushCharge() - distance * depletionPerPixel;
         engine.setBrushCharge(depleted);
       }
     }
