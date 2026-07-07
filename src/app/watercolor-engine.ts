@@ -778,6 +778,11 @@ export class WatercolorEngine {
     this.brushActive = true;
     this.hasContent = true;
     this.lastStrokeTime = performance.now();
+    // Re-dip the brush at the start of every stroke. Charge depletes over a
+    // single continuous stroke (dry-brush fade), but each new stroke must start
+    // fully loaded — otherwise consecutive same-pigment strokes deposit nothing
+    // once the first one has drained the charge.
+    this.brushCharge = 1;
   }
 
   moveStroke(uvX: number, uvY: number): void {

@@ -24,7 +24,10 @@ type CurrentPigmentValue = {
   pickedAt: number;
 };
 
-const BRUSH_CHARGE_DEPLETION_PER_CSS_PIXEL = 0.0026;
+// The brush re-dips to a full charge at the start of each stroke (see the engine's
+// beginStroke). Depletion is gentle so a normal full-width stroke stays loaded; the
+// dry-brush fade only appears on a very long continuous stroke (~1400 CSS px).
+const BRUSH_CHARGE_DEPLETION_PER_CSS_PIXEL = 0.0007;
 
 function getCurrentPigmentValue(rawValue: unknown): CurrentPigmentValue {
   if (

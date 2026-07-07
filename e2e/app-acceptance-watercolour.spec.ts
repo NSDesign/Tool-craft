@@ -112,6 +112,40 @@ test("acceptance: pigment swatch selection changes the active pigment and next s
   );
 });
 
+test("acceptance: consecutive same-pigment strokes each deposit paint", async ({ page }) => {
+  // Regression guard: the brush re-dips at the start of every stroke, so a second
+  // stroke of the already-selected pigment must still deposit (previously the first
+  // stroke drained the brush charge and later same-colour strokes painted nothing
+  // until a different swatch was re-picked).
+  const canvas = page.locator(watercolorCanvasSelector);
+  const box = await canvas.boundingBox();
+  if (!box) {
+    throw new Error("Watercolour canvas not found.");
+  }
+
+  async function strokeAtBand(yFrac: number): Promise<void> {
+    await page.mouse.move(box.x + box.width * 0.15, box.y + box.height * yFrac);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.85, box.y + box.height * yFrac, { steps: 10 });
+    await page.mouse.up();
+  }
+
+  // First stroke (default Red, full charge) establishes paint and, under the old
+  // bug, drained the charge.
+  await strokeAtBand(0.35);
+  await page.waitForTimeout(1500);
+
+  // Second stroke, same pigment, NO re-pick: must still change the canvas.
+  await expectToolcraftProductObservableToChange(
+    page,
+    async () => {
+      await strokeAtBand(0.65);
+      await page.waitForTimeout(1500);
+    },
+    { timeoutMs: 60_000 },
+  );
+});
+
 test("acceptance: hair type selection changes stroke bristle texture", async ({ page }) => {
   await expectToolcraftSegmentedControlCellsPreservePadding(page, "Hair type");
 
