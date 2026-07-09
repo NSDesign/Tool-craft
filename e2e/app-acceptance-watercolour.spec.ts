@@ -25,6 +25,53 @@ async function paintStroke(page: Page): Promise<void> {
   await page.mouse.up();
 }
 
+// Average RGB over a fractional region of the watercolour backing canvas.
+async function sampleAverageColor(
+  page: Page,
+  region: { x0: number; y0: number; x1: number; y1: number },
+): Promise<{ b: number; g: number; r: number }> {
+  return page.evaluate(({ x0, y0, x1, y1 }) => {
+    const canvas = document.querySelector(
+      '[data-toolcraft-watercolor-canvas="true"]',
+    ) as HTMLCanvasElement;
+    const w = canvas.width;
+    const h = canvas.height;
+    const scratch = document.createElement("canvas");
+    scratch.width = w;
+    scratch.height = h;
+    const ctx = scratch.getContext("2d")!;
+    ctx.drawImage(canvas, 0, 0);
+    const data = ctx.getImageData(
+      Math.round(w * x0),
+      Math.round(h * y0),
+      Math.max(1, Math.round(w * (x1 - x0))),
+      Math.max(1, Math.round(h * (y1 - y0))),
+    ).data;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let n = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      r += data[i];
+      g += data[i + 1];
+      b += data[i + 2];
+      n += 1;
+    }
+    return { b: Math.round(b / n), g: Math.round(g / n), r: Math.round(r / n) };
+  }, region);
+}
+
+async function strokeBand(page: Page, yFrac: number, x0: number, x1: number): Promise<void> {
+  const box = await page.locator(watercolorCanvasSelector).boundingBox();
+  if (!box) {
+    throw new Error("Watercolour canvas not found.");
+  }
+  await page.mouse.move(box.x + box.width * x0, box.y + box.height * yFrac);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * x1, box.y + box.height * yFrac, { steps: 20 });
+  await page.mouse.up();
+}
+
 async function selectToolcraftOption(page: Page, label: string, optionLabel: string): Promise<void> {
   const field = await getToolcraftFieldByLabel(page, label);
   await field.locator('[data-slot="select-trigger"]').click();
@@ -109,6 +156,52 @@ test("acceptance: pigment swatch selection changes the active pigment and next s
     },
     { timeoutMs: 60_000 },
   );
+});
+
+test("acceptance: mixing complementary pigments stays a muted colour, not pure black", async ({
+  page,
+}) => {
+  // Beer-Lambert compositing means overlapping complementary washes multiply
+  // reflectances toward a dark muted mud, never clipping to pure black the way
+  // the old linear paper-minus-CMY subtraction did.
+  await page.getByRole("radio", { name: "Blue" }).click();
+  for (let pass = 0; pass < 3; pass += 1) {
+    await strokeBand(page, 0.5, 0.15, 0.85);
+  }
+  await page.getByRole("radio", { name: "Orange" }).click();
+  for (let pass = 0; pass < 3; pass += 1) {
+    await strokeBand(page, 0.5, 0.15, 0.85);
+  }
+  await page.waitForTimeout(1200);
+
+  const mix = await sampleAverageColor(page, { x0: 0.35, x1: 0.65, y0: 0.45, y1: 0.55 });
+  const maxChannel = Math.max(mix.r, mix.g, mix.b);
+  // Not pure/near black: the overlap keeps real colour, unlike the old clip to (0,0,0).
+  expect(maxChannel).toBeGreaterThan(28);
+});
+
+test("acceptance: white pigment tints a colour instead of erasing it to paper", async ({ page }) => {
+  // White is a scattering/opaque pigment: over red it must read as a lighter,
+  // still-reddish PINK (hue preserved), not lift the red away to bare paper.
+  await page.getByRole("radio", { name: "Red" }).click();
+  for (let pass = 0; pass < 3; pass += 1) {
+    await strokeBand(page, 0.4, 0.1, 0.9);
+  }
+  await page.waitForTimeout(600);
+  const before = await sampleAverageColor(page, { x0: 0.6, x1: 0.88, y0: 0.36, y1: 0.44 });
+
+  await page.getByRole("radio", { name: "White" }).click();
+  for (let pass = 0; pass < 4; pass += 1) {
+    await strokeBand(page, 0.4, 0.55, 0.9);
+  }
+  await page.waitForTimeout(800);
+  const after = await sampleAverageColor(page, { x0: 0.6, x1: 0.88, y0: 0.36, y1: 0.44 });
+
+  // Lightened by the white...
+  expect(after.r + after.g + after.b).toBeGreaterThan(before.r + before.g + before.b);
+  // ...but still a red-dominant tint (pink), not a neutral grey or bare paper.
+  expect(after.r).toBeGreaterThan(after.g + 12);
+  expect(after.r).toBeGreaterThan(after.b + 12);
 });
 
 test("acceptance: consecutive same-pigment strokes each deposit paint", async ({ page }) => {

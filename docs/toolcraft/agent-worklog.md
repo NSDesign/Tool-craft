@@ -212,9 +212,52 @@ Four user-requested changes, shipped together on the same branch.
 - Visual probe evidence (in-process Playwright, screenshots reviewed): stroke painted into a persistent wet band blooms/feathers (wet-on-wet), same stroke on dry paper stays crisp; wetness-field diagnostic confirmed a water wash now persists as damp paper for several seconds where before it evaporated almost immediately.
 - Structural meta-validators and targeted functional e2e (fade, absorption, spacing, same-pigment) plus `pnpm build`: see final run below.
 
+### Iteration 5 (colour-mixing rework: Beer–Lambert composite + tinting white)
+
+Reported bug (two rainbow screenshots): mixing pigments darkened toward **pure black** (worst
+for complementary orange + blue/purple, visible even for analogous yellow + orange / green +
+yellow), and **White** lightened dark areas back toward paper-white and read as "white on red"
+instead of producing a tint.
+
+- Root cause: pigment was stored as additive CMY (`1 − swatchRGB`) and composited **linearly**
+  (`clamp(paper − Σpigment, 0, 1)`). Summing complementary CMY saturates all three channels →
+  the clamp floors to `(0,0,0)`. White was a pigment-*lift* (`surface.rgb *= 1 − strength`) that
+  removed colour toward paper, so it could not tint and turned black → white.
+- Fix (all in `src/app/watercolor-engine.ts`): switched to a physically multiplicative
+  **Beer–Lambert / glazing** model. Deposit now stores per-channel **absorbance** `−ln(reflectance)`
+  (uniform renamed `uDepositCmy` → `uDepositAbsorbance`, `rgb` clamped to `[0.02, 1]` before `ln`),
+  still accumulated additively (preserves same-pigment build-up). The composite renders
+  `paper · exp(−pigDensity · absorbance)` (both the with-background and transparent-export
+  branches; `pigDensity = 1.35`). Overlapping washes multiply reflectances, so complementary
+  mixes approach a dark muted mud, never a hard black. White keeps the "scale absorbance down"
+  mechanism (retuned gentler, `strength` cap 0.7) which, under the exponential composite,
+  desaturates rather than erases — yielding pink from red, lavender from purple, grey from black.
+  No schema/control/storage changes.
+- Guardrail coverage added (none existed — all prior e2e was colour-agnostic change-detection):
+  two new colour-assertion acceptance tests in `e2e/app-acceptance-watercolour.spec.ts` — orange
+  over blue must keep a non-black max channel (> 28), and white over red must lighten while
+  staying red-dominant (pink). Refined the `paint.currentPigmentColor` acceptance prose and the
+  renderer-plan colour-model section.
+
+#### Iteration 5 verification
+
+- Run: `pnpm typecheck` passes.
+- Visual + numeric probe (in-process Playwright, `chromium-1194`, screenshots reviewed): single
+  strokes render as their own pigment colour (watercolour-transparent, build up with layers);
+  **orange over blue = `[53,59,45]`** dark muted olive/brown (not black); **white over red =
+  `[197,125,107]`** pink; **white over black = `[116,112,105]`** neutral grey. Rainbow of all
+  eight swatches reads correctly.
+- `pnpm exec vitest run src`, structural meta-validators, targeted functional e2e (incl. the two
+  new colour assertions), and `pnpm build`: see final run below.
+
 ## Risks
 
 - Risk: Scope is large (real-time GPU simulation, two custom controls, full acceptance/performance suites). Tracked via task list across the implementation session.
+- Risk (Iteration 5): the Beer–Lambert model is glazing-accurate subtractive mixing, not full
+  spectral Kubelka–Munk, so secondaries are plausible (yellow + blue → dark green) but not
+  guaranteed vivid; white is a transparent tinting white (heavy application approaches paper), not
+  chalky opaque body-colour. Both accepted per the user's stated complaints; true spectral mixing
+  (Mixbox/KM) is a deferred larger option.
 - Risk (Iteration 4): the slower default evaporation means paint stays workable longer, which is the point, but a user who wants fast drying must raise Drying speed; the wider drying range keeps the fast end available.
 - Risk: The background-exclusion composite path (transparent pigment-only export) is a new shader branch layered onto the existing composite pass; it only activates when `export.includeBackground` is turned off, so the default (background included) visual output is unchanged.
 - Risk (Iteration 3): a single very fast pointer flick could enqueue more than MAX_DABS (64) dabs in one frame; the surplus is dropped that frame. In practice per-frame pointer travel on a normal canvas stays well under 64 dabs, and the arc-length cursor still advances so the next frame continues cleanly — accepted as a bounded, rare degradation rather than an unbounded uniform-array size.

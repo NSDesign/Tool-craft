@@ -2,14 +2,16 @@
 
 This is the app-specific renderer decision record for the watercolour painting app, required alongside `docs/toolcraft/agent-worklog.md` because the shared Toolcraft framework docs under `docs/toolcraft/` describe the general rules, not this app's actual decision.
 
-The simulation model follows David Small, "Modeling Watercolor by Simulating Diffusion, Pigment, and Paper Fibers" (MIT Media Lab, Visible Language Workshop): each cell carries a mobile surface layer (CMY pigment + water) and an infused layer soaked into the paper fibers, with per-step surface displacement forces (tilt gravity, surface tension, spreading), dampness-gated infused diffusion, capacity-clamped absorption, evaporation, and a subtractive `paper − (CMY_surface + CMY_infused)` render.
+The simulation model follows David Small, "Modeling Watercolor by Simulating Diffusion, Pigment, and Paper Fibers" (MIT Media Lab, Visible Language Workshop): each cell carries a mobile surface layer (pigment + water) and an infused layer soaked into the paper fibers, with per-step surface displacement forces (tilt gravity, surface tension, spreading), dampness-gated infused diffusion, capacity-clamped absorption, evaporation, and a **Beer–Lambert** composite.
+
+**Colour model (Beer–Lambert / glazing).** Pigment is stored as accumulated per-channel *absorbance* (optical density `−ln(reflectance)` of the swatch colour), summed additively as strokes are laid down. The composite renders `paper · exp(−density · absorbance)`, so stacking pigments multiplies their reflectances the way real transparent washes do: complementary overlaps (e.g. orange + blue) approach a dark muted brown/grey smoothly instead of the old linear `paper − CMY` subtraction that hard-clipped to pure black. White is a scattering/opaque pigment that scales the local absorbance *down* (a subtractive-white add is a no-op); under the exponential composite that desaturates rather than erases, so white over red reads as pink, over purple as lavender, over black as grey. (This is glazing-accurate subtractive mixing, not full spectral Kubelka–Munk, so secondaries are plausible — yellow + blue → dark green — but not guaranteed vivid.)
 
 ## Renderer Technique Decision Matrix
 
 Mirrors `rendererTechnique` in `src/app/app-performance.ts`.
 
 - `sourceRepresentation`: `procedural-data` — no uploaded/decoded source media; the paper heightmap and the pigment/water fields are both generated and evolved entirely on the GPU.
-- `productRepresentation`: `pixel` — the visible product is a raster subtractive composite of paper albedo and accumulated CMY pigment concentration.
+- `productRepresentation`: `pixel` — the visible product is a raster Beer–Lambert composite of paper albedo and accumulated per-channel pigment absorbance.
 - `previewRenderer`: `webgl` — the on-screen canvas renders through a WebGL2 context every animation frame (RGBA16F state textures via `EXT_color_buffer_float`; the simulation update writes the surface and infused layers in one MRT pass).
 - `exportRenderer`: `webgl` — export reuses the same WebGL2 simulation state; only the final readback-and-encode step runs on the CPU via a 2D canvas so `toBlob()` can produce PNG/JPEG bytes.
 - `rendererWorkload`: `pixel-output` — per-pixel force-field/advection/diffusion/absorption/evaporation recomputed across the full backing resolution every frame.

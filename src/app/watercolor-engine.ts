@@ -210,7 +210,7 @@ uniform float uBrushRadius;
 uniform int uBrushShape;
 uniform float uBrushHairNoise;
 uniform float uBrushCharge;
-uniform vec3 uDepositCmy;
+uniform vec3 uDepositAbsorbance;
 uniform bool uDepositIsWater;
 uniform bool uDepositIsWhite;
 
@@ -281,16 +281,19 @@ void main() {
         infused0.rgb -= lifted;
         surface1.rgb += lifted;
       } else if (uDepositIsWhite) {
-        // Body-colour white: lifts/covers pigment rather than adding to it
-        // (subtractive white would be a no-op).
-        float strength = clamp(acc * mix(0.22, 0.9, uPigmentOpacity), 0.0, 0.9);
+        // Opaque tinting white: scatters/scales the local pigment absorbance
+        // down instead of adding (a subtractive-white add is a no-op). Under the
+        // Beer-Lambert composite this desaturates rather than erases, so white
+        // over red reads as pink, over purple as lavender, over black as grey.
+        float strength = clamp(acc * mix(0.10, 0.5, uPigmentOpacity), 0.0, 0.7);
         surface1.rgb *= (1.0 - strength);
-        infused0.rgb *= (1.0 - strength * 0.5);
+        infused0.rgb *= (1.0 - strength * 0.6);
       } else {
-        // Additive pigment concentration — repeated strokes keep building
-        // density instead of chasing a per-pigment asymptote.
-        float concentration = mix(0.16, 0.6, uPigmentOpacity);
-        surface1.rgb += uDepositCmy * (acc * concentration);
+        // Additive absorbance (optical density) — repeated strokes keep building
+        // density; composited via paper * exp(-absorbance) so overlapping colours
+        // multiply reflectances (glazing) toward muted browns, not pure black.
+        float concentration = mix(0.10, 0.42, uPigmentOpacity);
+        surface1.rgb += uDepositAbsorbance * (acc * concentration);
         surface1.a = min(surface1.a + acc * 0.6, 2.5);
       }
     }
@@ -419,16 +422,21 @@ void main() {
     abs(texture2D(uInfused, vUv + vec2(uTexel.x, 0.0)).a - texture2D(uInfused, vUv - vec2(uTexel.x, 0.0)).a);
   pigment *= 1.0 + uEdgeDarkening * min(wetGrad * 2.2, 1.0) * 0.55;
 
+  // Beer-Lambert absorption: reflectance = exp(-density * absorbance). Stacking
+  // pigments multiplies reflectances (real glazing), so mixes approach muted
+  // darks smoothly instead of clamping to pure black.
+  float pigDensity = 1.35;
+
   if (uIncludeBackground) {
     // Relief shading strong enough that the paper texture reads on a blank
     // canvas, not only through a wash.
     vec3 paperColor = uBackgroundColor * mix(0.88, 1.08, height);
-    vec3 color = clamp(paperColor - pigment, 0.0, 1.0);
+    vec3 color = clamp(paperColor * exp(-pigDensity * pigment), 0.0, 1.0);
     color += min(surface.a, 1.0) * 0.05;
     gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
   } else {
-    float coverage = clamp(max(pigment.r, max(pigment.g, pigment.b)) * 1.25, 0.0, 1.0);
-    vec3 inkColor = clamp(vec3(1.0) - pigment, 0.0, 1.0) + min(surface.a, 1.0) * 0.04;
+    float coverage = clamp(1.0 - exp(-pigDensity * max(pigment.r, max(pigment.g, pigment.b))), 0.0, 1.0);
+    vec3 inkColor = clamp(exp(-pigDensity * pigment), 0.0, 1.0) + min(surface.a, 1.0) * 0.04;
     gl_FragColor = vec4(clamp(inkColor, 0.0, 1.0), coverage);
   }
 }
@@ -978,10 +986,18 @@ export class WatercolorEngine {
     );
     gl.uniform1f(gl.getUniformLocation(program, "uBrushCharge"), this.brushCharge);
 
-    // uDepositCmy is the pigment's subtractive concentration per channel: the
-    // complement of its visible hue (paper eq [11]-[13] renders paper − CMY).
+    // uDepositAbsorbance is the pigment's per-channel optical density, -ln(reflectance).
+    // The composite renders paper * exp(-absorbance), so stacking washes multiplies
+    // reflectances (glazing) toward muted browns instead of clipping to black.
     const [r, g, b] = hexToRgb01(this.params.pigmentHex);
-    gl.uniform3f(gl.getUniformLocation(program, "uDepositCmy"), 1 - r, 1 - g, 1 - b);
+    const toAbsorbance = (channel: number): number =>
+      -Math.log(Math.min(1, Math.max(0.02, channel)));
+    gl.uniform3f(
+      gl.getUniformLocation(program, "uDepositAbsorbance"),
+      toAbsorbance(r),
+      toAbsorbance(g),
+      toAbsorbance(b),
+    );
     gl.uniform1i(
       gl.getUniformLocation(program, "uDepositIsWater"),
       isWaterPigment(this.params.pigmentHex) ? 1 : 0,
