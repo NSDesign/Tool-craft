@@ -459,7 +459,7 @@ export const appAcceptance: readonly ToolcraftComponentAcceptance[] = [
     customControlCoverage: "all-custom-control-behavior",
     evidence: "rendered-pixels",
     expectedObservable:
-      "Clicking a pigment swatch (for example Orange) and then dragging a stroke deposits that pigment's colour instead of the previously selected pigment, with the brush re-dipped to full charge; clicking the Water swatch and stroking over dried paint deposits no colour but visibly re-wets it, making the dried stroke bleed and soften.",
+      "Clicking a pigment swatch (for example Orange) and then dragging a stroke deposits that pigment's colour instead of the previously selected pigment, with the brush re-dipped to full charge; clicking the Water swatch and stroking over dried paint deposits no colour but visibly re-wets it, making the dried stroke bleed and soften. Pigments mix subtractively via a Beer–Lambert composite, so overlapping colours multiply reflectances toward muted darks (orange over blue becomes a dark brown/grey, not pure black), and the White swatch tints rather than erasing (over red it reads as pink, over black as grey).",
     fixture: "Fresh watercolour canvas with the default Red pigment selected.",
     id: "paint.currentPigmentColor",
     kind: "control",
